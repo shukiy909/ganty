@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ganty</title>
+<meta name="theme-color" content="#4F7A63">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Ganty</div>
+  <div class="proj">
+    <select id="projectSelect" aria-label="פרויקט"></select>
+    <button id="projectMenuBtn" class="icon" aria-label="אפשרויות פרויקט">⋮</button>
+  </div>
+  <div class="zoom" role="group" aria-label="תצוגת זמן">
+    <button data-zoom="day">ימים</button>
+    <button data-zoom="week">שבועות</button>
+    <button data-zoom="month">חודשים</button>
+  </div>
+  <button id="todayBtn" class="ghost">היום</button>
+  <div class="spacer"></div>
+  <span id="status" class="status"></span>
+  <button id="signInBtn" class="primary">התחבר ל-Google</button>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main class="layout">
+  <section class="board-wrap">
+    <div id="gantt" class="gantt" dir="ltr"></div>
+    <div id="emptyHint" class="empty-hint" hidden></div>
+  </section>
+  <aside id="pool" class="pool">
+    <div class="pool-head">
+      <h2>מאגר משימות <span id="poolCount"></span></h2>
+      <button id="poolClose" class="icon only-mobile" aria-label="סגור">✕</button>
+    </div>
+    <div class="pool-tools">
+      <select id="poolFilter" aria-label="סינון"></select>
+      <button id="newTaskBtn" class="primary small">＋ משימה</button>
+    </div>
+    <p class="pool-tip">גרור משימה אל הלוח, או לחץ עליה כדי לשבץ.</p>
+    <div id="poolList" class="pool-list"></div>
+  </aside>
+</main>
+
+<button id="poolFab" class="pool-fab only-mobile">📥 מאגר <span id="poolFabCount"></span></button>
+
+<dialog id="dlg"><form id="dlgForm" method="dialog"></form></dialog>
+
+<script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js"></script>
+</body>
+</html>
