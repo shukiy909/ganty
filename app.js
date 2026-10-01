@@ -155,6 +155,23 @@ function criticalSet(list) {
   return set;
 }
 
+// ---------------------------------------------------------------- task details: status, priority, tags, costs
+const STATUS = { todo: 'לא התחיל', doing: 'בעבודה', waiting: '⏸ ממתין', blocked: '⛔ חסום' };
+const PRIORITY = { high: 'גבוהה', normal: 'רגילה', low: 'נמוכה' };
+const KINDS = { person: 'אדם / ספק', material: 'חומר / ציוד', money: 'כסף' };
+const money = (n) => `₪${Math.round(n || 0).toLocaleString('he-IL')}`;
+function allTags() {
+  const set = new Set();
+  data.tasks.forEach((t) => (t.tags || []).forEach((g) => set.add(g)));
+  return [...set].sort();
+}
+const parseTags = (txt) => [...new Set((txt || '').split(/[\s,]+/).map((x) => x.replace(/^#+/, '').trim()).filter(Boolean))];
+function costs(list) {
+  let plan = 0, act = 0;
+  for (const t of list) for (const r of t.resources || []) { plan += +r.costPlan || 0; act += +r.costAct || 0; }
+  return { plan, act };
+}
+
 // ---------------------------------------------------------------- who is responsible
 const WHO_BASE = ['אני', 'Claude', 'סוכן AI'];
 function initials(name) {
@@ -201,6 +218,12 @@ function renderHeader() {
   wf.innerHTML = `<option value="all">כל האחראים</option><option value="none">ללא אחראי</option>`
     + allWho().map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   wf.value = ui.assignee || 'all';
+  const tf = $('#tagFilter');
+  const tags = allTags();
+  tf.innerHTML = `<option value="all">כל התגיות</option>` + tags.map((g) => `<option value="${esc(g)}">#${esc(g)}</option>`).join('');
+  if (ui.tag !== 'all' && !tags.includes(ui.tag)) ui.tag = 'all';
+  tf.value = ui.tag || 'all';
+  tf.hidden = !tags.length;
   $('#critBtn').classList.toggle('on', !!ui.critical);
   const mode = ui.dw >= 28 ? 'day' : ui.dw >= 9 ? 'week' : 'month';
   document.querySelectorAll('.zoom button').forEach((b) => b.classList.toggle('on', b.dataset.zoom === mode));
@@ -297,7 +320,8 @@ function renderBoard() {
   const rows = [];
   const crit = ui.critical ? criticalSet(tasks) : new Set();
   const dimmed = (t) => (ui.critical && !crit.has(t.id))
-    || (ui.assignee && ui.assignee !== 'all' && (t.assignee || '') !== (ui.assignee === 'none' ? '' : ui.assignee));
+    || (ui.assignee && ui.assignee !== 'all' && (t.assignee || '') !== (ui.assignee === 'none' ? '' : ui.assignee))
+    || (ui.tag && ui.tag !== 'all' && !(t.tags || []).includes(ui.tag));
   for (const st of cur.stages) {
     const items = tasks.filter((t) => (t.stageId || cur.stages[0].id) === st.id).sort((x, y) => (x.start < y.start ? -1 : 1));
     const collapsed = !!ui.collapsed[st.id];
@@ -313,12 +337,14 @@ function renderBoard() {
     for (const t of items) {
       const s0 = dayNum(t.start), left = (s0 - R.a) * dw;
       const cls = [t.done ? 'done' : '', crit.has(t.id) ? 'crit' : '', dimmed(t) ? 'dim' : '', t.manualFinish ? 'manual' : ''].join(' ');
+      const marks = `${t.priority === 'high' ? '<span class="prio" title="עדיפות גבוהה"></span>' : ''}${(t.files || []).length ? `<span class="clip" title="${t.files.length} קבצים">📎${t.files.length}</span>` : ''}`;
+      const flag = !t.done && t.status === 'blocked' ? '⛔ ' : !t.done && t.status === 'waiting' ? '⏸ ' : '';
       const who = t.assignee ? `<span class="who" style="background:${whoColor(t.assignee)}" title="אחראי: ${esc(t.assignee)}">${esc(initials(t.assignee))}</span>` : '';
       const name = `${t.milestone ? '◆ ' : ''}${esc(t.title || '(ללא כותרת)')}`;
       let shape, right;
       if (t.milestone) {
         shape = `<div class="ms ${cls}" data-bar="${t.id}" style="left:${left + dw / 2 - 9}px;--c:${cur.color}" title="◆ ${esc(t.title)} · ${short(t.start)}${t.assignee ? ` · ${esc(t.assignee)}` : ''}">
-          <i></i>${who}<span class="ms-txt">${esc(t.title)}</span></div>`;
+          <i></i>${who}<span class="ms-txt">${flag}${esc(t.title)}</span>${marks}</div>`;
         right = left + dw / 2 + 10;
       } else {
         const ee = effEnd(t), width = (ee - s0 + 1) * dw, planned = (dayNum(t.end) - s0 + 1) * dw;
@@ -327,7 +353,7 @@ function renderBoard() {
         const tip = `${esc(t.title)} · ${short(t.start)}–${short(isoOf(ee))} · ${pct}%${t.assignee ? ` · ${esc(t.assignee)}` : ''}${t.manualFinish ? (t.done ? ' · סיום ידני' : ' · סיום ידני: מחכה לסימון "בוצע"') : ''}`;
         shape = `<div class="bar ${cls}" data-bar="${t.id}" style="left:${left}px;width:${width}px;--c:${cur.color}" title="${tip}">
             <div class="fill" style="width:${pct}%"></div>${late}${who}
-            <div class="txt">${t.manualFinish && !t.done ? '✋ ' : ''}${esc(t.title)}${width > 90 ? ` · ${pct}%` : ''}</div>
+            <div class="txt">${flag}${t.manualFinish && !t.done ? '✋ ' : ''}${esc(t.title)}${width > 90 ? ` · ${pct}%` : ''}</div>${marks}
             <div class="h l" data-edge="l"></div><div class="h r" data-edge="r"></div>
           </div>`;
         right = left + width;
@@ -344,7 +370,10 @@ function renderBoard() {
   }
 
   g.innerHTML = `<div class="g-inner" style="width:${labelWidth() + W}px">
-    <div class="g-head"><div class="g-corner">${esc(cur.name)}</div><div class="g-scale" style="width:${W}px">${top.join('')}${bot.join('')}</div></div>
+    <div class="g-head"><div class="g-corner"><div>${esc(cur.name)}${(() => {
+      const c = costs(data.tasks.filter((t) => t.projectId === cur.id && !t.deleted));
+      return c.plan || c.act ? `<div class="cost-sum ${c.act > c.plan ? 'over' : ''}" title="עלות מתוכננת מול בפועל">${money(c.act)} מתוך ${money(c.plan)}</div>` : '';
+    })()}</div></div><div class="g-scale" style="width:${W}px">${top.join('')}${bot.join('')}</div></div>
     <div class="g-body">${rows.join('')}</div>
     <div class="g-today" style="left:${labelWidth() + (today - R.a) * dw + dw / 2}px"></div>
   </div>`;
@@ -701,44 +730,96 @@ function stageOptions(p, sel) {
   return p.stages.map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
 }
 
-/** A bar was tapped: edit its details. */
+/** A bar was tapped: edit everything about it, in tabs. */
 function openTaskEditor(t) {
   if (!t) return;
   const p = project(t.projectId) || current();
-  const deps = JSON.parse(JSON.stringify(t.deps || []));
+  const draft = {
+    deps: JSON.parse(JSON.stringify(t.deps || [])),
+    steps: JSON.parse(JSON.stringify(t.steps || [])),
+    files: JSON.parse(JSON.stringify(t.files || [])),
+    resources: JSON.parse(JSON.stringify(t.resources || [])),
+    log: JSON.parse(JSON.stringify(t.log || [])),
+  };
   const others = data.tasks.filter((x) => x.scheduled && !x.deleted && x.projectId === p.id && x.id !== t.id);
   const who = allWho();
   const typeOpts = (sel) => Object.entries(DEP_TYPES).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${k} · ${v.he}</option>`).join('');
+  const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
+  const tabs = [['main', 'פרטים'], ['steps', 'צעדים'], ['files', 'קבצים'], ['res', 'משאבים'], ['log', 'יומן']];
   showDialog(`
-    <h3>עריכת ${t.milestone ? 'אבן דרך' : 'משימה'}</h3>
-    <label>כותרת<input type="text" name="title" value="${esc(t.title)}" required></label>
-    <div class="row2">
-      <label>שלב<select name="stage">${stageOptions(p, t.stageId)}</select></label>
-      <label>אחראי<select name="who"><option value="">ללא</option>${who.map((n) => `<option ${n === t.assignee ? 'selected' : ''}>${esc(n)}</option>`).join('')}<option value="__other">אחר…</option></select></label>
-    </div>
-    <label id="otherWho" hidden>שם האחראי<input type="text" name="whoName" placeholder="למשל: דני כהן"></label>
-    <label class="check"><input type="checkbox" name="milestone" ${t.milestone ? 'checked' : ''}> אבן דרך ◆ (יום אחד)</label>
-    <div class="row2">
-      <label>התחלה<input type="date" name="start" value="${t.start}" required></label>
-      <label id="endBox">סיום<input type="date" name="end" value="${t.end}"></label>
-    </div>
-    <div id="workBox">
-      <label>התקדמות: <output id="pv">${t.progress || 0}%</output>
-        <input type="range" name="progress" min="0" max="100" step="5" value="${t.progress || 0}"></label>
-      <label class="check"><input type="checkbox" name="manual" ${t.manualFinish ? 'checked' : ''}> ✋ סיום ידני: המשך הוא הערכה, ומה שאחריה מחכה לסימון "בוצע"</label>
-    </div>
-    <label class="check"><input type="checkbox" name="done" ${t.done ? 'checked' : ''}> בוצע</label>
-    <fieldset class="deps">
-      <legend>מתחילה אחרי <a class="info" href="help.html" target="_blank" rel="noopener" title="FS · SS · FF: הסבר ודוגמאות">ℹ️</a></legend>
-      <div id="depList"></div>
-      ${others.length ? `<div class="dep-add">
-        <select name="depFrom"><option value="">בחר משימה…</option>${others.map((o) => `<option value="${o.id}">${o.milestone ? '◆ ' : ''}${esc(o.title)}</option>`).join('')}</select>
-        <select name="depType" title="סוג התלות">${typeOpts('FS')}</select>
-        <input type="number" name="depLag" value="0" step="1" title="ימי המתנה">
-        <button type="button" class="small" id="depAdd">＋</button>
-      </div><p class="note">המספר הוא ימי המתנה (מרווח) אחרי המשימה הקודמת.</p>` : '<p class="note">אין עוד משימות בפרויקט שאפשר לחכות להן.</p>'}
-    </fieldset>
-    ${t.gid ? '<p class="note">מקושרת ל-Tasky: הכותרת, תאריך הסיום ו"בוצע" מתעדכנים גם שם.</p>' : ''}
+    <h3>${t.milestone ? 'אבן דרך' : 'משימה'}: ${esc(t.title)}</h3>
+    <div class="tabs" role="tablist">${tabs.map(([k, v], i) => `<button type="button" class="tab ${i ? '' : 'on'}" data-tab="${k}">${v}<span class="tab-n" id="n-${k}"></span></button>`).join('')}</div>
+
+    <section class="pane" data-pane="main">
+      <label>כותרת<input type="text" name="title" value="${esc(t.title)}" required></label>
+      <label>תיאור<textarea name="desc" rows="3" placeholder="מה צריך לעשות, פרטים חשובים…">${esc(t.desc || '')}</textarea></label>
+      <div class="row2">
+        <label>סטטוס<select name="status">${opts(STATUS, t.status || 'todo')}</select></label>
+        <label>עדיפות<select name="priority">${opts(PRIORITY, t.priority || 'normal')}</select></label>
+      </div>
+      <label id="whyBox">למה?<input type="text" name="why" value="${esc(t.statusWhy || '')}" placeholder="למשל: מחכה לאישור מהלקוח"></label>
+      <div class="row2">
+        <label>שלב<select name="stage">${stageOptions(p, t.stageId)}</select></label>
+        <label>אחראי<select name="who"><option value="">ללא</option>${who.map((n) => `<option ${n === t.assignee ? 'selected' : ''}>${esc(n)}</option>`).join('')}<option value="__other">אחר…</option></select></label>
+      </div>
+      <label id="otherWho" hidden>שם האחראי<input type="text" name="whoName" placeholder="למשל: דני כהן"></label>
+      <label>תגיות<input type="text" name="tags" value="${esc((t.tags || []).map((g) => '#' + g).join(' '))}" placeholder="#עיצוב #ספק" list="tagList">
+        <datalist id="tagList">${allTags().map((g) => `<option value="#${esc(g)}">`).join('')}</datalist></label>
+      <label class="check"><input type="checkbox" name="milestone" ${t.milestone ? 'checked' : ''}> אבן דרך ◆ (יום אחד)</label>
+      <div class="row2">
+        <label>התחלה<input type="date" name="start" value="${t.start}" required></label>
+        <label id="endBox">סיום<input type="date" name="end" value="${t.end}"></label>
+      </div>
+      <div id="workBox">
+        <div class="row2">
+          <label>שעות (הערכה)<input type="number" name="hEst" min="0" step="0.5" value="${t.hoursEst ?? ''}"></label>
+          <label>שעות (בפועל)<input type="number" name="hAct" min="0" step="0.5" value="${t.hoursAct ?? ''}" id="hAct"></label>
+        </div>
+        <label>התקדמות: <output id="pv">${t.progress || 0}%</output><span class="note" id="pvNote"></span>
+          <input type="range" name="progress" min="0" max="100" step="5" value="${t.progress || 0}"></label>
+        <label class="check"><input type="checkbox" name="manual" ${t.manualFinish ? 'checked' : ''}> ✋ סיום ידני: המשך הוא הערכה, ומה שאחריה מחכה לסימון "בוצע"</label>
+      </div>
+      <label class="check"><input type="checkbox" name="done" ${t.done ? 'checked' : ''}> בוצע</label>
+      <fieldset class="deps">
+        <legend>מתחילה אחרי <a class="info" href="help.html" target="_blank" rel="noopener" title="FS · SS · FF: הסבר ודוגמאות">ℹ️</a></legend>
+        <div id="depList"></div>
+        ${others.length ? `<div class="dep-add">
+          <select name="depFrom"><option value="">בחר משימה…</option>${others.map((o) => `<option value="${o.id}">${o.milestone ? '◆ ' : ''}${esc(o.title)}</option>`).join('')}</select>
+          <select name="depType" title="סוג התלות">${typeOpts('FS')}</select>
+          <input type="number" name="depLag" value="0" step="1" title="ימי המתנה">
+          <button type="button" class="small" id="depAdd">＋</button>
+        </div><p class="note">המספר הוא ימי המתנה (מרווח) אחרי המשימה הקודמת.</p>` : '<p class="note">אין עוד משימות בפרויקט שאפשר לחכות להן.</p>'}
+      </fieldset>
+      ${t.gid ? '<p class="note">מקושרת ל-Tasky: הכותרת, תאריך הסיום ו"בוצע" מתעדכנים גם שם.</p>' : ''}
+    </section>
+
+    <section class="pane" data-pane="steps" hidden>
+      <p class="note">צעדים קטנים בתוך המשימה. אם יש צעדים, ההתקדמות % מחושבת מהם לבד.</p>
+      <div id="stepList" class="list"></div>
+      <div class="add-row"><input type="text" id="stepNew" placeholder="צעד חדש…"><button type="button" class="small" id="stepAdd">＋</button></div>
+    </section>
+
+    <section class="pane" data-pane="files" hidden>
+      <div class="file-btns">
+        <label class="btn-file">⬆ העלה קבצים<input type="file" id="fileIn" multiple hidden></label>
+        <label class="btn-file">📷 צלם<input type="file" id="camIn" accept="image/*" capture="environment" hidden></label>
+      </div>
+      <p class="note" id="fileNote">${token ? 'הקבצים נשמרים בתיקייה Ganty/' + esc(p.name) + ' ב-Drive שלך.' : 'כדי להעלות קבצים צריך להתחבר ל-Google. קישורים אפשר להוסיף גם בלי.'}</p>
+      <div id="fileList" class="files"></div>
+      <div class="add-row"><input type="url" id="linkUrl" placeholder="הדבק קישור (Drive, אתר, שיחה עם Claude…)"><input type="text" id="linkName" placeholder="שם"><button type="button" class="small" id="linkAdd">＋</button></div>
+    </section>
+
+    <section class="pane" data-pane="res" hidden>
+      <div id="resList" class="res-list"></div>
+      <button type="button" class="ghost small" id="resAdd">＋ משאב</button>
+      <p class="cost-line" id="resSum"></p>
+    </section>
+
+    <section class="pane" data-pane="log" hidden>
+      <div class="add-row"><textarea id="logNew" rows="2" placeholder="מה התקדם? למשל: הספק אישר את ההצעה"></textarea><button type="button" class="small" id="logAdd">הוסף</button></div>
+      <div id="logList" class="log"></div>
+    </section>
+
     <div class="actions">
       <button value="save" class="primary">שמור</button>
       <button value="unschedule" class="ghost" formnovalidate>החזר למאגר</button>
@@ -747,67 +828,228 @@ function openTaskEditor(t) {
       <button value="cancel" class="ghost" formnovalidate>ביטול</button>
     </div>`, (action, fd) => {
     if (action === 'delete') {
-      if (!confirm('למחוק את המשימה? אם היא מקושרת, היא תימחק גם מ-Tasky.')) return false;
+      if (!confirm('למחוק את המשימה? אם היא מקושרת, היא תימחק גם מ-Tasky. קבצים שהועלו נשארים ב-Drive.')) return false;
       t.deleted = true; markGoogle(t);
       data.tasks.forEach((x) => { if (x.deps) x.deps = x.deps.filter((d) => d.from !== t.id); });
       return commit();
     }
     if (action === 'unschedule') { t.scheduled = false; return commit(); }
+    readRes();
     const start = fd.get('start'), end = fd.get('end') || start;
     const wasDone = !!t.done;
     t.title = fd.get('title').trim();
+    t.desc = fd.get('desc').trim();
+    t.status = fd.get('status');
+    t.statusWhy = ['waiting', 'blocked'].includes(t.status) ? fd.get('why').trim() : '';
+    t.priority = fd.get('priority');
+    t.tags = parseTags(fd.get('tags'));
     t.stageId = fd.get('stage');
     const w = fd.get('who');
     t.assignee = w === '__other' ? (fd.get('whoName') || '').trim() || null : w || null;
     t.milestone = fd.get('milestone') === 'on';
     t.start = start;
     t.end = t.milestone ? start : (end < start ? start : end);
-    t.progress = Number(fd.get('progress') || 0);
+    const num = (v) => (v === '' || v == null ? null : Math.max(0, Number(v)));
+    t.hoursEst = num(fd.get('hEst'));
+    t.hoursAct = num(fd.get('hAct'));
     t.manualFinish = !t.milestone && fd.get('manual') === 'on';
+    t.steps = draft.steps.filter((x) => x.text.trim());
+    t.progress = t.steps.length ? Math.round(100 * t.steps.filter((x) => x.done).length / t.steps.length) : Number(fd.get('progress') || 0);
     t.done = fd.get('done') === 'on';
     if (t.done) {
       t.progress = 100;
+      t.status = 'doing' === t.status ? 'doing' : t.status;
       if (!wasDone) {
         t.doneOn = todayIso();
-        // A manual task finished late really ended today.
-        if (t.manualFinish && t.doneOn > t.end) t.end = t.doneOn;
+        if (t.manualFinish && t.doneOn > t.end) t.end = t.doneOn; // a manual task finished late really ended today
       }
-    }
-    t.deps = deps;
+    } else if (t.status === 'todo' && t.progress > 0) t.status = 'doing';
+    t.deps = draft.deps;
+    t.files = draft.files;
+    t.resources = draft.resources.filter((r) => r.name.trim());
+    t.log = draft.log;
     markGoogle(t);
     commit();
   }, (f) => {
+    // tabs
+    const show = (k) => {
+      f.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === k));
+      f.querySelectorAll('.pane').forEach((x) => { x.hidden = x.dataset.pane !== k; });
+    };
+    f.querySelector('.tabs').onclick = (e) => { const b = e.target.closest('.tab'); if (b) show(b.dataset.tab); };
+    const counts = () => {
+      const set = (k, n) => { f.querySelector(`#n-${k}`).textContent = n ? ` ${n}` : ''; };
+      set('steps', draft.steps.length ? `${draft.steps.filter((x) => x.done).length}/${draft.steps.length}` : '');
+      set('files', draft.files.length); set('res', draft.resources.length); set('log', draft.log.length);
+    };
+
+    // details
     f.progress.oninput = () => { f.querySelector('#pv').textContent = `${f.progress.value}%`; };
     const shape = () => {
       const ms = f.milestone.checked;
       f.querySelector('#endBox').hidden = ms;
       f.querySelector('#workBox').hidden = ms;
+      f.querySelector('#whyBox').hidden = !['waiting', 'blocked'].includes(f.status.value);
     };
-    f.milestone.onchange = shape; shape();
+    f.milestone.onchange = shape; f.status.onchange = shape; shape();
     f.who.onchange = () => { f.querySelector('#otherWho').hidden = f.who.value !== '__other'; };
+    const hoursColor = () => {
+      const est = Number(f.hEst.value), act = Number(f.hAct.value);
+      f.querySelector('#hAct').classList.toggle('over', est > 0 && act > est);
+    };
+    f.hEst.oninput = hoursColor; f.hAct.oninput = hoursColor; hoursColor();
+
     const list = f.querySelector('#depList');
     const drawDeps = () => {
-      list.innerHTML = deps.length ? deps.map((d, i) => {
+      list.innerHTML = draft.deps.length ? draft.deps.map((d, i) => {
         const o = task(d.from);
         return `<div class="dep-row" title="${esc(depTip(d))}"><span>${esc(o ? o.title : '(נמחקה)')}</span>
           <span class="dep-tag static">${depLabel(d)}</span><span class="note">${DEP_TYPES[d.type || 'FS'].he}</span>
           <button type="button" class="icon" data-rm="${i}" aria-label="הסר תלות">✕</button></div>`;
       }).join('') : '<p class="note">לא תלויה בשום משימה.</p>';
     };
-    list.onclick = (e) => { const b = e.target.closest('[data-rm]'); if (b) { deps.splice(+b.dataset.rm, 1); drawDeps(); } };
+    list.onclick = (e) => { const b = e.target.closest('[data-rm]'); if (b) { draft.deps.splice(+b.dataset.rm, 1); drawDeps(); } };
     const add = f.querySelector('#depAdd');
     if (add) add.onclick = () => {
       const from = f.depFrom.value;
       if (!from) return;
       if (dependsOn(task(from), t.id)) { alert('אי אפשר: זה יוצר מעגל, כי המשימה השנייה כבר תלויה בזו.'); return; }
-      const i = deps.findIndex((d) => d.from === from);
+      const i = draft.deps.findIndex((d) => d.from === from);
       const d = { from, type: f.depType.value, lag: Math.trunc(Number(f.depLag.value) || 0) };
-      if (i >= 0) deps[i] = d; else deps.push(d);
+      if (i >= 0) draft.deps[i] = d; else draft.deps.push(d);
       f.depFrom.value = '';
       drawDeps();
     };
     drawDeps();
+
+    // steps
+    const stepBox = f.querySelector('#stepList');
+    const progressFromSteps = () => {
+      const note = f.querySelector('#pvNote');
+      if (!draft.steps.length) { f.progress.disabled = false; note.textContent = ''; return; }
+      const pct = Math.round(100 * draft.steps.filter((x) => x.done).length / draft.steps.length);
+      f.progress.value = pct; f.progress.disabled = true;
+      f.querySelector('#pv').textContent = `${pct}%`;
+      note.textContent = ' (לפי הצעדים)';
+    };
+    const drawSteps = () => {
+      stepBox.innerHTML = draft.steps.length ? draft.steps.map((x, i) => `<div class="step ${x.done ? 'done' : ''}">
+        <input type="checkbox" data-sdone="${i}" ${x.done ? 'checked' : ''} aria-label="בוצע">
+        <input type="text" data-stext="${i}" value="${esc(x.text)}">
+        <button type="button" class="icon" data-sup="${i}" aria-label="למעלה">↑</button>
+        <button type="button" class="icon" data-srm="${i}" aria-label="מחק">✕</button></div>`).join('') : '<p class="note">אין צעדים עדיין.</p>';
+      progressFromSteps(); counts();
+    };
+    stepBox.onchange = (e) => {
+      const i = e.target.dataset.sdone ?? e.target.dataset.stext;
+      if (i == null) return;
+      if (e.target.dataset.sdone != null) draft.steps[+i].done = e.target.checked;
+      else draft.steps[+i].text = e.target.value;
+      drawSteps();
+    };
+    stepBox.onclick = (e) => {
+      const up = e.target.closest('[data-sup]'), rm = e.target.closest('[data-srm]');
+      if (up && +up.dataset.sup > 0) { const i = +up.dataset.sup; [draft.steps[i - 1], draft.steps[i]] = [draft.steps[i], draft.steps[i - 1]]; drawSteps(); }
+      if (rm) { draft.steps.splice(+rm.dataset.srm, 1); drawSteps(); }
+    };
+    const stepNew = f.querySelector('#stepNew');
+    const addStep = () => { const v = stepNew.value.trim(); if (!v) return; draft.steps.push({ id: uid(), text: v, done: false }); stepNew.value = ''; drawSteps(); stepNew.focus(); };
+    f.querySelector('#stepAdd').onclick = addStep;
+    stepNew.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addStep(); } };
+    drawSteps();
+
+    // files
+    const fileBox = f.querySelector('#fileList'), fileNote = f.querySelector('#fileNote');
+    const drawFiles = () => {
+      fileBox.innerHTML = draft.files.length ? draft.files.map((x, i) => `<div class="file">
+        <a href="${esc(x.url)}" target="_blank" rel="noopener">${x.thumb ? `<img src="${x.thumb}" alt="">` : `<span class="ficon">${fileIcon(x)}</span>`}<span class="fname">${esc(x.name)}</span></a>
+        <button type="button" class="icon" data-frm="${i}" aria-label="הסר">✕</button></div>`).join('') : '<p class="note">אין קבצים עדיין.</p>';
+      counts();
+    };
+    fileBox.onclick = (e) => { const b = e.target.closest('[data-frm]'); if (b) { draft.files.splice(+b.dataset.frm, 1); drawFiles(); } };
+    const upload = async (input) => {
+      const files = [...input.files];
+      input.value = '';
+      if (!files.length) return;
+      if (!token) { alert('כדי להעלות קבצים, התחבר קודם ל-Google (הכפתור בראש המסך).'); return; }
+      for (const file of files) {
+        fileNote.textContent = `מעלה את "${file.name}"…`;
+        try {
+          const x = await uploadToDrive(file, p);
+          if (/^image\//.test(file.type)) x.thumb = await thumbnail(file);
+          draft.files.push(x);
+          drawFiles();
+        } catch (err) {
+          alert(`ההעלאה של "${file.name}" נכשלה (${err.message}). נסה שוב.`);
+        }
+      }
+      fileNote.textContent = `הקבצים נשמרים בתיקייה Ganty/${p.name} ב-Drive שלך. זכור ללחוץ "שמור".`;
+    };
+    f.querySelector('#fileIn').onchange = (e) => upload(e.target);
+    f.querySelector('#camIn').onchange = (e) => upload(e.target);
+    f.querySelector('#linkAdd').onclick = () => {
+      let url = f.querySelector('#linkUrl').value.trim();
+      if (!url) return;
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      const name = f.querySelector('#linkName').value.trim() || url.replace(/^https?:\/\//, '').slice(0, 40);
+      draft.files.push({ id: uid(), name, url, mime: /claude\.ai/.test(url) ? 'claude' : '' });
+      f.querySelector('#linkUrl').value = ''; f.querySelector('#linkName').value = '';
+      drawFiles();
+    };
+    drawFiles();
+
+    // resources
+    const resBox = f.querySelector('#resList');
+    const readRes = () => {
+      resBox.querySelectorAll('.res').forEach((row) => {
+        const r = draft.resources[+row.dataset.i];
+        row.querySelectorAll('[data-k]').forEach((inp) => { r[inp.dataset.k] = inp.value; });
+      });
+    };
+    const sum = () => {
+      readRes();
+      const c = costs([{ resources: draft.resources }]);
+      f.querySelector('#resSum').innerHTML = c.plan || c.act ? `סה"כ: <b class="${c.act > c.plan ? 'over' : ''}">${money(c.act)}</b> בפועל, מתוך ${money(c.plan)} מתוכנן` : '';
+    };
+    const drawRes = () => {
+      resBox.innerHTML = draft.resources.length ? draft.resources.map((r, i) => `<div class="res" data-i="${i}">
+        <label class="mini wide">שם<input type="text" data-k="name" value="${esc(r.name)}" placeholder="חשמלאי, צבע, פרסום…"></label>
+        <button type="button" class="icon" data-rrm="${i}" aria-label="מחק משאב">✕</button>
+        <label class="mini">סוג<select data-k="kind">${opts(KINDS, r.kind || 'person')}</select></label>
+        <label class="mini">כמות<input type="number" data-k="qty" value="${esc(r.qty ?? '')}" step="any"></label>
+        <label class="mini">יחידה<input type="text" data-k="unit" value="${esc(r.unit || '')}" placeholder="שעות, ליטר…"></label>
+        <label class="mini">עלות מתוכננת ₪<input type="number" data-k="costPlan" value="${esc(r.costPlan ?? '')}" step="any"></label>
+        <label class="mini">עלות בפועל ₪<input type="number" data-k="costAct" value="${esc(r.costAct ?? '')}" step="any"></label>
+        <label class="mini" ${r.kind && r.kind !== 'person' ? 'hidden' : ''}>טלפון<input type="tel" data-k="phone" value="${esc(r.phone || '')}"></label>
+        </div>`).join('') : '<p class="note">אין משאבים עדיין.</p>';
+      sum(); counts();
+    };
+    resBox.oninput = sum;
+    resBox.onchange = (e) => { if (e.target.dataset.k === 'kind') { readRes(); drawRes(); } };
+    resBox.onclick = (e) => { const b = e.target.closest('[data-rrm]'); if (b) { readRes(); draft.resources.splice(+b.dataset.rrm, 1); drawRes(); } };
+    f.querySelector('#resAdd').onclick = () => { readRes(); draft.resources.push({ id: uid(), name: '', kind: 'person' }); drawRes(); resBox.querySelector('.res:last-child input').focus(); };
+    drawRes();
+
+    // log
+    const logBox = f.querySelector('#logList');
+    const drawLog = () => {
+      logBox.innerHTML = draft.log.length ? draft.log.map((x, i) => `<div class="log-item"><span class="log-date">${short(x.date)}</span>
+        <span class="log-text">${esc(x.text)}</span><button type="button" class="icon" data-lrm="${i}" aria-label="מחק">✕</button></div>`).join('') : '<p class="note">אין עדכונים עדיין.</p>';
+      counts();
+    };
+    logBox.onclick = (e) => { const b = e.target.closest('[data-lrm]'); if (b) { draft.log.splice(+b.dataset.lrm, 1); drawLog(); } };
+    f.querySelector('#logAdd').onclick = () => {
+      const el = f.querySelector('#logNew'), v = el.value.trim();
+      if (!v) return;
+      draft.log.unshift({ date: todayIso(), text: v });
+      el.value = '';
+      drawLog();
+    };
+    drawLog();
+    // readRes is used by the save handler above
+    openTaskEditor.readRes = readRes;
   });
+  function readRes() { openTaskEditor.readRes && openTaskEditor.readRes(); }
 }
 
 /** A pool task was tapped: schedule it (or edit / delete it). */
@@ -935,6 +1177,7 @@ $('#projectMenuBtn').onclick = () => current() && openProjectDialog(current());
 document.querySelectorAll('.zoom button').forEach((b) => b.onclick = () => setZoom(ZOOM[b.dataset.zoom]));
 $('#todayBtn').onclick = scrollToToday;
 $('#whoFilter').onchange = (e) => { ui.assignee = e.target.value; saveUi(); renderBoard(); };
+$('#tagFilter').onchange = (e) => { ui.tag = e.target.value; saveUi(); renderBoard(); };
 $('#critBtn').onclick = () => { ui.critical = !ui.critical; saveUi(); renderHeader(); renderBoard(); };
 $('#poolFilter').onchange = (e) => { ui.poolFilter = e.target.value; saveUi(); renderPool(); };
 $('#newTaskBtn').onclick = () => openPoolTask({ id: uid(), title: '', projectId: ui.poolFilter !== 'all' && ui.poolFilter !== 'none' ? ui.poolFilter : (current() && current().id), scheduled: false, done: false, progress: 0, gDirty: true }, true);
@@ -1114,6 +1357,57 @@ function projectByName(name) {
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const FILE_NAME = 'ganty-data.json';
+
+/** "Ganty/<project name>" in Drive, for the project's files. */
+async function projectFolderId(p) {
+  if (p.folderId) return p.folderId;
+  const parent = await driveFolderId();
+  const name = p.name.replace(/'/g, "\\'");
+  const q = encodeURIComponent(`name='${name}' and '${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const res = await api('GET', `${DRIVE}/files?q=${q}&fields=files(id)&spaces=drive`);
+  const f = (res.files || [])[0] || await api('POST', `${DRIVE}/files?fields=id`, { name: p.name, parents: [parent], mimeType: 'application/vnd.google-apps.folder' });
+  p.folderId = f.id;
+  return f.id;
+}
+
+/** Uploads one file (any size) to the project's folder. Returns { id, name, mime, url }. */
+async function uploadToDrive(file, p) {
+  if (!token) throw new Error('no-token');
+  const folder = await projectFolderId(p);
+  const start = await fetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name,mimeType,webViewLink`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': file.type || 'application/octet-stream' },
+    body: JSON.stringify({ name: file.name, parents: [folder] }),
+  });
+  if (!start.ok) throw new Error(`${start.status}`);
+  const res = await fetch(start.headers.get('Location'), { method: 'PUT', body: file });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const f = await res.json();
+  return { id: uid(), driveId: f.id, name: f.name, mime: f.mimeType, url: f.webViewLink };
+}
+
+/** A small preview of a picture, kept with the task (so it shows on every device). */
+async function thumbnail(file) {
+  try {
+    const img = await createImageBitmap(file);
+    const k = Math.min(1, 220 / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.7);
+  } catch { return null; }
+}
+
+function fileIcon(f) {
+  const m = (f.mime || '') + ' ' + (f.name || '');
+  if (/image/.test(m)) return '🖼️';
+  if (/pdf/i.test(m)) return '📕';
+  if (/word|document|\.docx?/i.test(m)) return '📘';
+  if (/sheet|excel|\.xlsx?|csv/i.test(m)) return '📗';
+  if (/presentation|powerpoint|\.pptx?/i.test(m)) return '📙';
+  if (!f.driveId) return '🔗';
+  return '📄';
+}
 
 async function driveFolderId() {
   if (data.folderId) return data.folderId;
