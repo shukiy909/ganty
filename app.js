@@ -44,11 +44,135 @@ function saveUi() { localStorage.setItem(LS_UI, JSON.stringify(ui)); }
 
 /** Every change goes through here: kept on the device now, sent to Google a moment later. */
 function commit() {
+  applyConstraints();
   data.updatedAt = Date.now();
   data.dirty = true;
   localStorage.setItem(LS_DATA, JSON.stringify(data));
   render();
   scheduleSync();
+}
+
+// ---------------------------------------------------------------- scheduling: dependencies, manual finish, critical path
+const DEP_TYPES = {
+  FS: { he: 'סיום ← התחלה', text: 'המשימה מתחילה רק אחרי שהקודמת נגמרת' },
+  SS: { he: 'התחלה ← התחלה', text: 'המשימה מתחילה רק אחרי שהקודמת התחילה' },
+  FF: { he: 'סיום ← סיום', text: 'המשימה נגמרת רק אחרי שהקודמת נגמרת' },
+};
+const depTip = (d) => `${d.type || 'FS'} · ${DEP_TYPES[d.type || 'FS'].he}: ${DEP_TYPES[d.type || 'FS'].text}${d.lag ? ` · ${d.lag} ימי המתנה` : ''}`;
+const depLabel = (d) => `${d.type || 'FS'}${d.lag ? (d.lag > 0 ? '+' : '') + d.lag : ''}`;
+
+/** Where a task really ends: a "manual finish" task that is late keeps growing until it is marked done. */
+function effEnd(t) {
+  const e = dayNum(t.end);
+  return t.manualFinish && !t.done && !t.milestone ? Math.max(e, dayNum(todayIso())) : e;
+}
+
+/** Tasks in an order where every task comes after the ones it depends on. */
+function topo(list) {
+  const ids = new Set(list.map((t) => t.id));
+  const indeg = new Map(list.map((t) => [t.id, 0]));
+  const next = new Map(list.map((t) => [t.id, []]));
+  for (const t of list) for (const d of t.deps || []) {
+    if (!ids.has(d.from)) continue;
+    indeg.set(t.id, indeg.get(t.id) + 1);
+    next.get(d.from).push(t.id);
+  }
+  const queue = list.filter((t) => indeg.get(t.id) === 0).map((t) => t.id), out = [];
+  while (queue.length) {
+    const id = queue.shift();
+    out.push(id);
+    for (const n of next.get(id)) { indeg.set(n, indeg.get(n) - 1); if (indeg.get(n) === 0) queue.push(n); }
+  }
+  for (const t of list) if (!out.includes(t.id)) out.push(t.id); // a loop, just in case
+  return out.map(task);
+}
+
+/**
+ * Keeps the rules: a task never starts (or ends) before what it depends on allows.
+ * Late tasks push the ones after them forward; nothing is ever pulled back.
+ */
+function applyConstraints() {
+  let changed = false;
+  const sched = data.tasks.filter((t) => t.scheduled && !t.deleted);
+  const ids = new Set(sched.map((t) => t.id));
+  for (const t of topo(sched)) {
+    if (!t.deps || !t.deps.length || t.done) continue;
+    let minStart = -Infinity, minEnd = -Infinity;
+    for (const d of t.deps) {
+      if (!ids.has(d.from)) continue;
+      const p = task(d.from), lag = d.lag || 0;
+      if (d.type === 'SS') minStart = Math.max(minStart, dayNum(p.start) + lag);
+      else if (d.type === 'FF') minEnd = Math.max(minEnd, effEnd(p) + lag);
+      else minStart = Math.max(minStart, effEnd(p) + 1 + lag);
+    }
+    const s = dayNum(t.start), e = dayNum(t.end);
+    let shift = 0;
+    if (s < minStart) shift = minStart - s;
+    if (e + shift < minEnd) shift = minEnd - e;
+    if (shift > 0) {
+      t.start = isoOf(s + shift); t.end = isoOf(e + shift);
+      markGoogle(t);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Does [a] wait (directly or through others) for task [id]? Used to refuse loops. */
+function dependsOn(a, id, seen = new Set()) {
+  for (const d of (a && a.deps) || []) {
+    if (d.from === id) return true;
+    if (seen.has(d.from)) continue;
+    seen.add(d.from);
+    if (dependsOn(task(d.from), id, seen)) return true;
+  }
+  return false;
+}
+
+/** The tasks that set the project's end date: any delay in them delays the whole project. */
+function criticalSet(list) {
+  const set = new Set();
+  if (!list.length) return set;
+  const ids = new Set(list.map((t) => t.id));
+  const order = topo(list);
+  const succ = new Map(list.map((t) => [t.id, []]));
+  for (const t of list) for (const d of t.deps || []) if (ids.has(d.from)) succ.get(d.from).push({ t, d });
+  const end = Math.max(...list.map(effEnd));
+  const LF = new Map();
+  const dur = (t) => effEnd(t) - dayNum(t.start);
+  for (const t of order.reverse()) {
+    const ss = succ.get(t.id);
+    let lf = end;
+    for (const { t: n, d } of ss) {
+      const lag = d.lag || 0, lfN = LF.get(n.id), lsN = lfN - dur(n);
+      if (d.type === 'SS') lf = Math.min(lf, lsN - lag + dur(t));
+      else if (d.type === 'FF') lf = Math.min(lf, lfN - lag);
+      else lf = Math.min(lf, lsN - 1 - lag);
+    }
+    LF.set(t.id, lf);
+    if (lf - effEnd(t) <= 0) set.add(t.id);
+  }
+  return set;
+}
+
+// ---------------------------------------------------------------- who is responsible
+const WHO_BASE = ['אני', 'Claude', 'סוכן AI'];
+function initials(name) {
+  if (name === 'אני') return 'אני';
+  if (name === 'Claude') return 'CL';
+  if (name === 'סוכן AI') return 'AI';
+  const w = name.trim().split(/\s+/);
+  return (w.length > 1 ? w[0][0] + w[1][0] : name.trim().slice(0, 2)).toUpperCase();
+}
+function whoColor(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return ['#7C3AED', '#0EA5E9', '#D97706', '#DB2777', '#059669', '#4B5563'][h % 6];
+}
+function allWho() {
+  const names = new Set(WHO_BASE);
+  data.tasks.forEach((t) => t.assignee && names.add(t.assignee));
+  return [...names];
 }
 
 function newProject(name, color) {
@@ -73,6 +197,11 @@ function renderHeader() {
   sel.innerHTML = (cur ? '' : '<option value="" selected disabled>אין פרויקטים</option>') + data.projects.map((p) => `<option value="${p.id}" ${cur && p.id === cur.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
     + `<option value="__new">＋ פרויקט חדש</option>`;
   $('#projectMenuBtn').disabled = !cur;
+  const wf = $('#whoFilter');
+  wf.innerHTML = `<option value="all">כל האחראים</option><option value="none">ללא אחראי</option>`
+    + allWho().map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  wf.value = ui.assignee || 'all';
+  $('#critBtn').classList.toggle('on', !!ui.critical);
   const mode = ui.dw >= 28 ? 'day' : ui.dw >= 9 ? 'week' : 'month';
   document.querySelectorAll('.zoom button').forEach((b) => b.classList.toggle('on', b.dataset.zoom === mode));
 }
@@ -166,12 +295,15 @@ function renderBoard() {
 
   // Rows: a stage row, then its tasks (sorted by start).
   const rows = [];
+  const crit = ui.critical ? criticalSet(tasks) : new Set();
+  const dimmed = (t) => (ui.critical && !crit.has(t.id))
+    || (ui.assignee && ui.assignee !== 'all' && (t.assignee || '') !== (ui.assignee === 'none' ? '' : ui.assignee));
   for (const st of cur.stages) {
     const items = tasks.filter((t) => (t.stageId || cur.stages[0].id) === st.id).sort((x, y) => (x.start < y.start ? -1 : 1));
     const collapsed = !!ui.collapsed[st.id];
     let span = '';
     if (items.length) {
-      const s = Math.min(...items.map((t) => dayNum(t.start))), e = Math.max(...items.map((t) => dayNum(t.end)));
+      const s = Math.min(...items.map((t) => dayNum(t.start))), e = Math.max(...items.map(effEnd));
       span = `<div class="stage-span" style="left:${(s - R.a) * dw}px;width:${(e - s + 1) * dw}px;background:${cur.color}"></div>`;
     }
     rows.push(`<div class="g-row stage" data-stage="${st.id}">
@@ -179,16 +311,31 @@ function renderBoard() {
       <div class="g-track" style="width:${W}px;${grid}">${span}</div></div>`);
     if (collapsed) continue;
     for (const t of items) {
-      const left = (dayNum(t.start) - R.a) * dw, width = (dayNum(t.end) - dayNum(t.start) + 1) * dw;
-      const pct = t.done ? 100 : (t.progress || 0);
-      rows.push(`<div class="g-row" data-stage="${st.id}" data-task="${t.id}">
-        <div class="g-label"><span class="name" data-open="${t.id}">${esc(t.title || '(ללא כותרת)')}</span></div>
-        <div class="g-track" style="width:${W}px;${grid}">
-          <div class="bar ${t.done ? 'done' : ''}" data-bar="${t.id}" style="left:${left}px;width:${width}px;--c:${cur.color}" title="${esc(t.title)} · ${short(t.start)}–${short(t.end)} · ${pct}%">
-            <div class="fill" style="width:${pct}%"></div>
-            <div class="txt">${esc(t.title)}${width > 90 ? ` · ${pct}%` : ''}</div>
+      const s0 = dayNum(t.start), left = (s0 - R.a) * dw;
+      const cls = [t.done ? 'done' : '', crit.has(t.id) ? 'crit' : '', dimmed(t) ? 'dim' : '', t.manualFinish ? 'manual' : ''].join(' ');
+      const who = t.assignee ? `<span class="who" style="background:${whoColor(t.assignee)}" title="אחראי: ${esc(t.assignee)}">${esc(initials(t.assignee))}</span>` : '';
+      const name = `${t.milestone ? '◆ ' : ''}${esc(t.title || '(ללא כותרת)')}`;
+      let shape, right;
+      if (t.milestone) {
+        shape = `<div class="ms ${cls}" data-bar="${t.id}" style="left:${left + dw / 2 - 9}px;--c:${cur.color}" title="◆ ${esc(t.title)} · ${short(t.start)}${t.assignee ? ` · ${esc(t.assignee)}` : ''}">
+          <i></i>${who}<span class="ms-txt">${esc(t.title)}</span></div>`;
+        right = left + dw / 2 + 10;
+      } else {
+        const ee = effEnd(t), width = (ee - s0 + 1) * dw, planned = (dayNum(t.end) - s0 + 1) * dw;
+        const pct = t.done ? 100 : (t.progress || 0);
+        const late = ee > dayNum(t.end) ? `<div class="late" style="left:${planned}px"></div>` : '';
+        const tip = `${esc(t.title)} · ${short(t.start)}–${short(isoOf(ee))} · ${pct}%${t.assignee ? ` · ${esc(t.assignee)}` : ''}${t.manualFinish ? (t.done ? ' · סיום ידני' : ' · סיום ידני: מחכה לסימון "בוצע"') : ''}`;
+        shape = `<div class="bar ${cls}" data-bar="${t.id}" style="left:${left}px;width:${width}px;--c:${cur.color}" title="${tip}">
+            <div class="fill" style="width:${pct}%"></div>${late}${who}
+            <div class="txt">${t.manualFinish && !t.done ? '✋ ' : ''}${esc(t.title)}${width > 90 ? ` · ${pct}%` : ''}</div>
             <div class="h l" data-edge="l"></div><div class="h r" data-edge="r"></div>
-          </div></div></div>`);
+          </div>`;
+        right = left + width;
+      }
+      rows.push(`<div class="g-row" data-stage="${st.id}" data-task="${t.id}">
+        <div class="g-label"><span class="name" data-open="${t.id}">${name}</span></div>
+        <div class="g-track" style="width:${W}px;${grid}">${shape}
+          <div class="link-dot" data-link="${t.id}" style="left:${right + 3}px" title="גרור לפס אחר כדי ליצור תלות"></div></div></div>`);
     }
   }
   // Spare rows, so there is always room to drop.
@@ -202,6 +349,7 @@ function renderBoard() {
     <div class="g-today" style="left:${labelWidth() + (today - R.a) * dw + dw / 2}px"></div>
   </div>`;
 
+  drawArrows(tasks);
   hint.hidden = tasks.length > 0;
   hint.innerHTML = 'הלוח ריק.<br>גרור לכאן משימה מהמאגר, או לחץ על משימה במאגר ובחר "שבץ בלוח".';
 
@@ -212,6 +360,44 @@ function renderBoard() {
     g.scrollLeft = keepLeft;
     g.scrollTop = keepTop;
   }
+}
+
+/** Draws the dependency arrows (and their FS / SS / FF tags) over the board. */
+function drawArrows(tasks) {
+  const inner = document.querySelector('.g-inner');
+  if (!inner) return;
+  const box = inner.getBoundingClientRect();
+  const pos = {};
+  inner.querySelectorAll('[data-bar]').forEach((el) => {
+    const shape = el.classList.contains('ms') ? el.querySelector('i') : el;
+    const r = shape.getBoundingClientRect();
+    pos[el.dataset.bar] = { l: r.left - box.left, r: r.right - box.left, y: r.top - box.top + r.height / 2 };
+  });
+  const rowH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 38;
+  let paths = '', tags = '';
+  for (const t of tasks) for (const d of t.deps || []) {
+    const a = pos[d.from], b = pos[t.id];
+    if (!a || !b) continue;
+    const type = d.type || 'FS';
+    const x1 = type === 'SS' ? a.l : a.r, x2 = type === 'FF' ? b.r : b.l, y1 = a.y, y2 = b.y;
+    let path, tx, ty = (y1 + y2) / 2;
+    if (type === 'FS') {
+      if (x2 - x1 >= 18) { path = `M${x1} ${y1} H${x1 + 9} V${y2} H${x2 - 1}`; tx = x1 + 9; }
+      else {
+        const ym = y1 + (y2 > y1 ? 1 : -1) * rowH / 2;
+        path = `M${x1} ${y1} H${x1 + 9} V${ym} H${x2 - 11} V${y2} H${x2 - 1}`; tx = (x1 + x2) / 2; ty = ym;
+      }
+    } else if (type === 'SS') {
+      const xm = Math.min(x1, x2) - 11; path = `M${x1} ${y1} H${xm} V${y2} H${x2 - 1}`; tx = xm;
+    } else {
+      const xm = Math.max(x1, x2) + 11; path = `M${x1} ${y1} H${xm} V${y2} H${x2 + 1}`; tx = xm;
+    }
+    const key = `${t.id}|${d.from}`;
+    paths += `<path class="dep" d="${path}" marker-end="url(#ah)"/><path class="hit" data-dep="${key}" d="${path}"><title>${esc(depTip(d))}</title></path>`;
+    tags += `<div class="dep-tag" data-dep="${key}" style="left:${tx}px;top:${ty}px" title="${esc(depTip(d))} · לחץ לעריכה">${depLabel(d)}</div>`;
+  }
+  inner.insertAdjacentHTML('beforeend', `<svg class="g-arrows" width="${inner.scrollWidth}" height="${inner.scrollHeight}">
+    <defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" class="ah"/></marker></defs>${paths}</svg>${tags}`);
 }
 
 function scrollToToday() {
@@ -250,14 +436,21 @@ function stageAtPoint(x, y) {
 }
 
 $('#gantt').addEventListener('pointerdown', (e) => {
-  const barEl = e.target.closest('.bar');
+  const dot = e.target.closest('.link-dot');
+  if (dot) {
+    e.preventDefault();
+    drag = { kind: 'link', from: dot.dataset.link, x0: e.clientX, y0: e.clientY, active: true, moved: false };
+    return;
+  }
+  const barEl = e.target.closest('.bar, .ms');
   if (!barEl) return;
   const t = task(barEl.dataset.bar);
   if (!t) return;
   const rect = barEl.getBoundingClientRect();
   const edgeZone = e.pointerType === 'touch' ? 18 : 8;
   let mode = 'move';
-  if (e.clientX - rect.left < edgeZone) mode = 'l';
+  if (barEl.classList.contains('ms')) mode = 'move';
+  else if (e.clientX - rect.left < edgeZone) mode = 'l';
   else if (rect.right - e.clientX < edgeZone) mode = 'r';
   drag = { kind: 'bar', id: t.id, el: barEl, mode, x0: e.clientX, y0: e.clientY, start: t.start, end: t.end, active: e.pointerType !== 'touch', moved: false, pointerId: e.pointerId };
   if (e.pointerType === 'touch') {
@@ -281,6 +474,7 @@ window.addEventListener('pointermove', (e) => {
     else { if (far > 8) { clearTimeout(drag.timer); drag = null; } return; } // a touch that scrolls
   }
   if (drag.kind === 'pool') return movePoolGhost(e);
+  if (drag.kind === 'link') return moveLink(e);
   const d = Math.round(dx / ui.dw);
   if (Math.abs(dx) > 3) drag.moved = true;
   let s = dayNum(drag.start), en = dayNum(drag.end);
@@ -289,6 +483,12 @@ window.addEventListener('pointermove', (e) => {
   if (drag.mode === 'r') en = Math.max(en + d, s);
   drag.newStart = isoOf(s); drag.newEnd = isoOf(en);
   drag.el.classList.add('dragging');
+  if (drag.el.classList.contains('ms')) {
+    drag.newEnd = drag.newStart;
+    drag.el.style.left = `${(s - R.a) * ui.dw + ui.dw / 2 - 9}px`;
+    drag.el.querySelector('.ms-txt').textContent = short(drag.newStart);
+    return;
+  }
   drag.el.style.left = `${(s - R.a) * ui.dw}px`;
   drag.el.style.width = `${(en - s + 1) * ui.dw}px`;
   drag.el.title = `${short(drag.newStart)}–${short(drag.newEnd)}`;
@@ -304,6 +504,7 @@ window.addEventListener('pointerup', (e) => {
   const d = drag;
   drag = null;
   if (d.kind === 'pool') return dropPool(d, e);
+  if (d.kind === 'link') return dropLink(d, e);
   d.el.classList.remove('armed', 'dragging');
   const t = task(d.id);
   if (!t) return;
@@ -318,8 +519,78 @@ window.addEventListener('pointerup', (e) => {
 });
 window.addEventListener('pointercancel', () => { if (drag) { clearTimeout(drag.timer); if (drag.ghost) drag.ghost.remove(); drag = null; render(); } });
 
-// Clicks: task names open the editor, stage rows fold.
+/** Dragging from a bar's ⚬ dot: a line follows the pointer. */
+function moveLink(e) {
+  const inner = document.querySelector('.g-inner');
+  const src = document.querySelector(`[data-bar="${drag.from}"]`);
+  if (!inner || !src) return;
+  const box = inner.getBoundingClientRect(), r = (src.classList.contains('ms') ? src.querySelector('i') : src).getBoundingClientRect();
+  let svg = document.getElementById('linkTmp');
+  if (!svg) {
+    inner.insertAdjacentHTML('beforeend', `<svg id="linkTmp" class="g-arrows" width="${inner.scrollWidth}" height="${inner.scrollHeight}"><path class="dep tmp"/></svg>`);
+    svg = document.getElementById('linkTmp');
+  }
+  drag.moved = true;
+  svg.querySelector('path').setAttribute('d', `M${r.right - box.left} ${r.top - box.top + r.height / 2} L${e.clientX - box.left} ${e.clientY - box.top}`);
+  document.querySelectorAll('.link-target').forEach((x) => x.classList.remove('link-target'));
+  const over = document.elementFromPoint(e.clientX, e.clientY);
+  const tgt = over && over.closest('[data-bar]');
+  if (tgt && tgt.dataset.bar !== drag.from) tgt.classList.add('link-target');
+}
+
+function dropLink(d, e) {
+  const tmp = document.getElementById('linkTmp');
+  if (tmp) tmp.remove();
+  const over = document.elementFromPoint(e.clientX, e.clientY);
+  const tgt = over && over.closest('[data-bar]');
+  document.querySelectorAll('.link-target').forEach((x) => x.classList.remove('link-target'));
+  if (!tgt || tgt.dataset.bar === d.from) return;
+  addDep(task(tgt.dataset.bar), d.from, 'FS', 0);
+}
+
+/** [succ] will wait for [fromId]. Refuses loops (A waits for B that waits for A). */
+function addDep(succ, fromId, type, lag) {
+  if (!succ || succ.id === fromId) return false;
+  if (dependsOn(task(fromId), succ.id)) { alert('אי אפשר: זה יוצר מעגל, כי המשימה השנייה כבר תלויה בזו.'); return false; }
+  succ.deps = (succ.deps || []).filter((x) => x.from !== fromId);
+  succ.deps.push({ from: fromId, type: type || 'FS', lag: lag || 0 });
+  commit();
+  return true;
+}
+
+/** An arrow (or its tag) was clicked: type, waiting days, delete. */
+function openDepDialog(succId, fromId) {
+  const t = task(succId), p = task(fromId);
+  const d = t && (t.deps || []).find((x) => x.from === fromId);
+  if (!d) return;
+  showDialog(`
+    <h3>תלות</h3>
+    <p class="dep-names"><b>${esc(p.title)}</b> ← <b>${esc(t.title)}</b></p>
+    <label>סוג התלות <a class="info" href="help.html" target="_blank" rel="noopener">ℹ️ הסבר ודוגמאות</a>
+      <select name="type">${Object.entries(DEP_TYPES).map(([k, v]) => `<option value="${k}" ${k === (d.type || 'FS') ? 'selected' : ''}>${k} · ${v.he}</option>`).join('')}</select></label>
+    <p class="note" id="depExplain"></p>
+    <label>ימי המתנה (מרווח)<input type="number" name="lag" value="${d.lag || 0}" step="1"></label>
+    <div class="actions">
+      <button value="save" class="primary">שמור</button>
+      <span class="grow"></span>
+      <button value="delete" class="danger" formnovalidate>מחק תלות</button>
+      <button value="cancel" class="ghost" formnovalidate>ביטול</button>
+    </div>`, (action, fd) => {
+    if (action === 'delete') { t.deps = t.deps.filter((x) => x !== d); return commit(); }
+    d.type = fd.get('type');
+    d.lag = Math.trunc(Number(fd.get('lag')) || 0);
+    commit();
+  }, (f) => {
+    const say = () => { f.querySelector('#depExplain').textContent = DEP_TYPES[f.type.value].text + '.'; };
+    f.type.onchange = say;
+    say();
+  });
+}
+
+// Clicks: task names open the editor, stage rows fold, arrows open their settings.
 $('#gantt').addEventListener('click', (e) => {
+  const dep = e.target.closest('[data-dep]');
+  if (dep) { const [succ, from] = dep.getAttribute('data-dep').split('|'); return openDepDialog(succ, from); }
   const open = e.target.closest('[data-open]');
   if (open) return openTaskEditor(task(open.dataset.open));
   const tog = e.target.closest('[data-stage-toggle]');
@@ -434,17 +705,39 @@ function stageOptions(p, sel) {
 function openTaskEditor(t) {
   if (!t) return;
   const p = project(t.projectId) || current();
+  const deps = JSON.parse(JSON.stringify(t.deps || []));
+  const others = data.tasks.filter((x) => x.scheduled && !x.deleted && x.projectId === p.id && x.id !== t.id);
+  const who = allWho();
+  const typeOpts = (sel) => Object.entries(DEP_TYPES).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${k} · ${v.he}</option>`).join('');
   showDialog(`
-    <h3>עריכת משימה</h3>
+    <h3>עריכת ${t.milestone ? 'אבן דרך' : 'משימה'}</h3>
     <label>כותרת<input type="text" name="title" value="${esc(t.title)}" required></label>
-    <label>שלב<select name="stage">${stageOptions(p, t.stageId)}</select></label>
+    <div class="row2">
+      <label>שלב<select name="stage">${stageOptions(p, t.stageId)}</select></label>
+      <label>אחראי<select name="who"><option value="">ללא</option>${who.map((n) => `<option ${n === t.assignee ? 'selected' : ''}>${esc(n)}</option>`).join('')}<option value="__other">אחר…</option></select></label>
+    </div>
+    <label id="otherWho" hidden>שם האחראי<input type="text" name="whoName" placeholder="למשל: דני כהן"></label>
+    <label class="check"><input type="checkbox" name="milestone" ${t.milestone ? 'checked' : ''}> אבן דרך ◆ (יום אחד)</label>
     <div class="row2">
       <label>התחלה<input type="date" name="start" value="${t.start}" required></label>
-      <label>סיום<input type="date" name="end" value="${t.end}" required></label>
+      <label id="endBox">סיום<input type="date" name="end" value="${t.end}"></label>
     </div>
-    <label>התקדמות: <output id="pv">${t.progress || 0}%</output>
-      <input type="range" name="progress" min="0" max="100" step="5" value="${t.progress || 0}"></label>
+    <div id="workBox">
+      <label>התקדמות: <output id="pv">${t.progress || 0}%</output>
+        <input type="range" name="progress" min="0" max="100" step="5" value="${t.progress || 0}"></label>
+      <label class="check"><input type="checkbox" name="manual" ${t.manualFinish ? 'checked' : ''}> ✋ סיום ידני: המשך הוא הערכה, ומה שאחריה מחכה לסימון "בוצע"</label>
+    </div>
     <label class="check"><input type="checkbox" name="done" ${t.done ? 'checked' : ''}> בוצע</label>
+    <fieldset class="deps">
+      <legend>מתחילה אחרי <a class="info" href="help.html" target="_blank" rel="noopener" title="FS · SS · FF: הסבר ודוגמאות">ℹ️</a></legend>
+      <div id="depList"></div>
+      ${others.length ? `<div class="dep-add">
+        <select name="depFrom"><option value="">בחר משימה…</option>${others.map((o) => `<option value="${o.id}">${o.milestone ? '◆ ' : ''}${esc(o.title)}</option>`).join('')}</select>
+        <select name="depType" title="סוג התלות">${typeOpts('FS')}</select>
+        <input type="number" name="depLag" value="0" step="1" title="ימי המתנה">
+        <button type="button" class="small" id="depAdd">＋</button>
+      </div><p class="note">המספר הוא ימי המתנה (מרווח) אחרי המשימה הקודמת.</p>` : '<p class="note">אין עוד משימות בפרויקט שאפשר לחכות להן.</p>'}
+    </fieldset>
     ${t.gid ? '<p class="note">מקושרת ל-Tasky: הכותרת, תאריך הסיום ו"בוצע" מתעדכנים גם שם.</p>' : ''}
     <div class="actions">
       <button value="save" class="primary">שמור</button>
@@ -455,19 +748,66 @@ function openTaskEditor(t) {
     </div>`, (action, fd) => {
     if (action === 'delete') {
       if (!confirm('למחוק את המשימה? אם היא מקושרת, היא תימחק גם מ-Tasky.')) return false;
-      t.deleted = true; markGoogle(t); return commit();
+      t.deleted = true; markGoogle(t);
+      data.tasks.forEach((x) => { if (x.deps) x.deps = x.deps.filter((d) => d.from !== t.id); });
+      return commit();
     }
     if (action === 'unschedule') { t.scheduled = false; return commit(); }
-    const start = fd.get('start'), end = fd.get('end');
+    const start = fd.get('start'), end = fd.get('end') || start;
+    const wasDone = !!t.done;
     t.title = fd.get('title').trim();
     t.stageId = fd.get('stage');
-    t.start = start; t.end = end < start ? start : end;
-    t.progress = Number(fd.get('progress'));
+    const w = fd.get('who');
+    t.assignee = w === '__other' ? (fd.get('whoName') || '').trim() || null : w || null;
+    t.milestone = fd.get('milestone') === 'on';
+    t.start = start;
+    t.end = t.milestone ? start : (end < start ? start : end);
+    t.progress = Number(fd.get('progress') || 0);
+    t.manualFinish = !t.milestone && fd.get('manual') === 'on';
     t.done = fd.get('done') === 'on';
-    if (t.done) t.progress = 100;
+    if (t.done) {
+      t.progress = 100;
+      if (!wasDone) {
+        t.doneOn = todayIso();
+        // A manual task finished late really ended today.
+        if (t.manualFinish && t.doneOn > t.end) t.end = t.doneOn;
+      }
+    }
+    t.deps = deps;
     markGoogle(t);
     commit();
-  }, (f) => { f.progress.oninput = () => { f.querySelector('#pv').textContent = `${f.progress.value}%`; }; });
+  }, (f) => {
+    f.progress.oninput = () => { f.querySelector('#pv').textContent = `${f.progress.value}%`; };
+    const shape = () => {
+      const ms = f.milestone.checked;
+      f.querySelector('#endBox').hidden = ms;
+      f.querySelector('#workBox').hidden = ms;
+    };
+    f.milestone.onchange = shape; shape();
+    f.who.onchange = () => { f.querySelector('#otherWho').hidden = f.who.value !== '__other'; };
+    const list = f.querySelector('#depList');
+    const drawDeps = () => {
+      list.innerHTML = deps.length ? deps.map((d, i) => {
+        const o = task(d.from);
+        return `<div class="dep-row" title="${esc(depTip(d))}"><span>${esc(o ? o.title : '(נמחקה)')}</span>
+          <span class="dep-tag static">${depLabel(d)}</span><span class="note">${DEP_TYPES[d.type || 'FS'].he}</span>
+          <button type="button" class="icon" data-rm="${i}" aria-label="הסר תלות">✕</button></div>`;
+      }).join('') : '<p class="note">לא תלויה בשום משימה.</p>';
+    };
+    list.onclick = (e) => { const b = e.target.closest('[data-rm]'); if (b) { deps.splice(+b.dataset.rm, 1); drawDeps(); } };
+    const add = f.querySelector('#depAdd');
+    if (add) add.onclick = () => {
+      const from = f.depFrom.value;
+      if (!from) return;
+      if (dependsOn(task(from), t.id)) { alert('אי אפשר: זה יוצר מעגל, כי המשימה השנייה כבר תלויה בזו.'); return; }
+      const i = deps.findIndex((d) => d.from === from);
+      const d = { from, type: f.depType.value, lag: Math.trunc(Number(f.depLag.value) || 0) };
+      if (i >= 0) deps[i] = d; else deps.push(d);
+      f.depFrom.value = '';
+      drawDeps();
+    };
+    drawDeps();
+  });
 }
 
 /** A pool task was tapped: schedule it (or edit / delete it). */
@@ -594,6 +934,8 @@ $('#projectSelect').onchange = (e) => {
 $('#projectMenuBtn').onclick = () => current() && openProjectDialog(current());
 document.querySelectorAll('.zoom button').forEach((b) => b.onclick = () => setZoom(ZOOM[b.dataset.zoom]));
 $('#todayBtn').onclick = scrollToToday;
+$('#whoFilter').onchange = (e) => { ui.assignee = e.target.value; saveUi(); renderBoard(); };
+$('#critBtn').onclick = () => { ui.critical = !ui.critical; saveUi(); renderHeader(); renderBoard(); };
 $('#poolFilter').onchange = (e) => { ui.poolFilter = e.target.value; saveUi(); renderPool(); };
 $('#newTaskBtn').onclick = () => openPoolTask({ id: uid(), title: '', projectId: ui.poolFilter !== 'all' && ui.poolFilter !== 'none' ? ui.poolFilter : (current() && current().id), scheduled: false, done: false, progress: 0, gDirty: true }, true);
 $('#poolFab').onclick = () => $('#pool').classList.add('open');
@@ -701,7 +1043,11 @@ async function syncTasks() {
     t.gNotes = r.notes || '';
     t.due = r.due ? r.due.slice(0, 10) : null;
     const done = r.status === 'completed';
-    if (done && !t.done) t.progress = 100;
+    if (done && !t.done) {
+      t.progress = 100;
+      t.doneOn = todayIso();
+      if (t.scheduled && t.manualFinish && t.doneOn > t.end) t.end = t.doneOn;
+    }
     t.done = done;
     const pname = projectNameFromNotes(r.notes);
     if (pname && !t.scheduled) t.projectId = projectByName(pname).id;
@@ -746,6 +1092,7 @@ async function syncTasks() {
   }
   // Deleted tasks are gone for good once Google knows.
   data.tasks = data.tasks.filter((t) => !(t.deleted && !t.gDirty));
+  applyConstraints(); // a task finished (or not) in Tasky may move the ones after it
 }
 
 function projectNameFromNotes(notes) {
@@ -864,5 +1211,6 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // ---------------------------------------------------------------- start
 window.addEventListener('resize', () => renderBoard());
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
-render();
+// Late "manual finish" tasks grow day by day: check the rules on every start.
+if (applyConstraints()) commit(); else render();
 initGoogle();

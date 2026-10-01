@@ -27,6 +27,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   font-family: Rubik, "Segoe UI", Arial, sans-serif;
@@ -151,6 +152,49 @@ input[type=range] { accent-color: var(--primary); width: 100%; }
 }
 .ghost-drag .d { font-size: 12px; color: var(--primary); margin-top: 2px; }
 
+/* ---------- stage 6: milestones, who, dependencies, critical path ---------- */
+.ms {
+  position: absolute; top: calc(var(--row-h) / 2 - 9px); height: 18px; display: flex; align-items: center; gap: 6px;
+  cursor: grab; user-select: none; touch-action: pan-x pan-y; white-space: nowrap; z-index: 1;
+}
+.ms i { width: 14px; height: 14px; margin: 0 2px; transform: rotate(45deg); background: var(--c); border-radius: 2px; box-shadow: var(--shadow); flex: none; }
+.ms-txt { font-size: 12px; direction: rtl; color: var(--text); }
+.ms.dragging { opacity: .8; cursor: grabbing; }
+.ms.armed i, .ms.link-target i { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ms.done i { opacity: .5; }
+.who {
+  position: relative; flex: none; min-width: 20px; height: 20px; padding: 0 4px; margin-left: 3px; border-radius: 10px;
+  color: #fff; font-size: 10px; font-weight: 500; display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid rgba(255, 255, 255, .85); direction: rtl;
+}
+.ms .who { margin: 0; }
+.late { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(45deg, rgba(255, 255, 255, .5) 0 4px, transparent 4px 9px); }
+.bar.manual:not(.done) { border-right: 3px dashed rgba(255, 255, 255, .9); }
+.crit { outline: 2.5px solid var(--danger); outline-offset: 1px; }
+.ms.crit { outline: none; } .ms.crit i { outline: 2.5px solid var(--danger); outline-offset: 2px; }
+.dim { opacity: .22; }
+.bar.link-target { outline: 2px solid var(--accent); outline-offset: 2px; }
+.link-dot {
+  position: absolute; top: calc(var(--row-h) / 2 - 6px); width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--primary); background: var(--card); cursor: crosshair; opacity: 0; z-index: 2; transition: opacity .15s;
+}
+.g-row:hover .link-dot { opacity: 1; }
+@media (hover: none) { .link-dot { display: none; } }
+.g-arrows { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; overflow: visible; }
+.g-arrows path.dep { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.g-arrows path.tmp { stroke: var(--accent); stroke-dasharray: 5 4; }
+.g-arrows path.ah { fill: var(--muted); }
+.g-arrows path.hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+.dep-tag {
+  position: absolute; z-index: 2; transform: translate(-50%, -50%); font-size: 10px; line-height: 15px; padding: 0 5px;
+  background: var(--card); color: var(--muted); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; direction: ltr; white-space: nowrap;
+}
+.dep-tag:hover { color: var(--text); border-color: var(--muted); }
+.dep-tag.static { position: static; transform: none; display: inline-block; cursor: default; }
+.who-filter { max-width: 140px; padding: 6px 8px; font-size: 14px; }
+#critBtn.on { background: var(--danger); color: #fff; border-color: var(--danger); }
+.help-link { text-decoration: none; font-size: 18px; }
+
 /* ---------- dialogs ---------- */
 dialog {
   border: 0; border-radius: 18px; padding: 0; background: var(--card); color: var(--text);
@@ -171,7 +215,15 @@ dialog .check { flex-direction: row; align-items: center; gap: 8px; color: var(-
 .stages-edit { display: flex; flex-direction: column; gap: 6px; }
 .stages-edit .st { display: flex; gap: 4px; align-items: center; }
 .stages-edit .st input { flex: 1; min-width: 0; }
-.note { font-size: 12px; color: var(--muted); }
+.note { font-size: 12px; color: var(--muted); margin: 0; }
+fieldset.deps { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px 10px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+fieldset.deps legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+.dep-row { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.dep-row > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep-add { display: grid; grid-template-columns: 1fr auto 56px auto; gap: 6px; }
+.dep-add select, .dep-add input { min-width: 0; padding: 6px 8px; font-size: 14px; }
+.info { font-size: 12px; text-decoration: none; margin-inline-start: 6px; }
+.dep-names { margin: 0; font-size: 15px; }
 
 /* ---------- phone ---------- */
 .only-mobile { display: none; }

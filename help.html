@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ganty · סוגי תלויות</title>
+<link rel="icon" href="icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #F7F4EC; --card: #FFFFFF; --text: #24302A; --muted: #6B7570; --line: #E3DED1; --a: #4F7A63; --b: #1E6FD9; --arrow: #E08A4B; --na: #9AA6A0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1B211D; --card: #252D28; --text: #E6ECE8; --muted: #9AA6A0; --line: #333C36; --a: #8DBFA2; --b: #5EA0FF; --arrow: #F0A26A; --na: #6B7570; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: Rubik, "Segoe UI", Arial, sans-serif; line-height: 1.6; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 26px; font-weight: 500; margin: 0 0 4px; }
+  h2 { font-size: 19px; font-weight: 500; margin: 0 0 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .lead { color: var(--muted); margin: 0 0 22px; }
+  .card { background: var(--card); border-radius: 16px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 2px 8px rgba(0,0,0,.05); }
+  .code { direction: ltr; font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 8px; color: var(--muted); }
+  .rule { font-weight: 500; margin: 2px 0 6px; }
+  .ex { color: var(--muted); margin: 0 0 10px; }
+  .badge { font-size: 12px; border-radius: 8px; padding: 0 8px; background: var(--line); color: var(--muted); font-weight: 400; }
+  .default { background: var(--a); color: #fff; }
+  svg { width: 100%; height: auto; display: block; direction: ltr; }
+  svg text { font-family: inherit; font-size: 13px; fill: var(--text); }
+  svg .axis { stroke: var(--line); }
+  svg .t-a { fill: var(--a); } svg .t-b { fill: var(--b); }
+  svg .arr { stroke: var(--arrow); stroke-width: 2; fill: none; }
+  svg .ah { fill: var(--arrow); }
+  svg .lbl { fill: #fff; font-size: 12px; }
+  svg .gap { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  .na { opacity: .7; }
+  a { color: var(--a); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { border-bottom: 1px solid var(--line); padding: 6px 4px; text-align: right; vertical-align: top; }
+  th { color: var(--muted); font-weight: 400; }
+</style>
+</head>
+<body>
+<main>
+  <h1>סוגי תלויות ב-Ganty</h1>
+  <p class="lead">תלות אומרת למשימה אחת לחכות לאחרת. בכל ציור: <b style="color:var(--a)">א'</b> היא המשימה הקודמת, <b style="color:var(--b)">ב'</b> היא המשימה שמחכה, והחץ הכתום הוא התלות. הזמן רץ משמאל לימין.</p>
+
+  <section class="card">
+    <h2>סיום ← התחלה <span class="code">FS · Finish-to-Start</span> <span class="badge default">ברירת המחדל</span></h2>
+    <p class="rule">ב' מתחילה רק אחרי שא' נגמרת.</p>
+    <p class="ex">דוגמה: "פיתוח" מתחיל רק אחרי ש"עיצוב" נגמר. זה הסוג הנפוץ ביותר, כ-90% מהתלויות.</p>
+    <svg viewBox="0 0 600 120" role="img" aria-label="פס א' נגמר, ואז מתחיל פס ב'">
+      <defs><marker id="m1" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" class="ah"/></marker></defs>
+      <rect x="40" y="18" width="220" height="30" rx="8" class="t-a"/><text x="250" y="38" text-anchor="end" class="lbl">א' · עיצוב</text>
+      <rect x="290" y="72" width="240" height="30" rx="8" class="t-b"/><text x="520" y="92" text-anchor="end" class="lbl">ב' · פיתוח</text>
+      <path d="M260 33 H274 V87 H288" class="arr" marker-end="url(#m1)"/>
+    </svg>
+  </section>
+
+  <section class="card">
+    <h2>התחלה ← התחלה <span class="code">SS · Start-to-Start</span></h2>
+    <p class="rule">ב' מתחילה רק אחרי שא' התחילה. אחרי זה הן רצות במקביל.</p>
+    <p class="ex">דוגמה: "כתיבת תוכן" מתחילה יחד עם "עיצוב", או כמה ימים אחריו.</p>
+    <svg viewBox="0 0 600 120" role="img" aria-label="פס א' ופס ב' מתחילים באותו יום">
+      <defs><marker id="m2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" class="ah"/></marker></defs>
+      <rect x="80" y="18" width="300" height="30" rx="8" class="t-a"/><text x="370" y="38" text-anchor="end" class="lbl">א' · עיצוב</text>
+      <rect x="80" y="72" width="230" height="30" rx="8" class="t-b"/><text x="300" y="92" text-anchor="end" class="lbl">ב' · כתיבת תוכן</text>
+      <path d="M80 33 H60 V87 H78" class="arr" marker-end="url(#m2)"/>
+    </svg>
+  </section>
+
+  <section class="card">
+    <h2>סיום ← סיום <span class="code">FF · Finish-to-Finish</span></h2>
+    <p class="rule">ב' נגמרת רק אחרי שא' נגמרת. ההתחלות יכולות להיות שונות.</p>
+    <p class="ex">דוגמה: "בדיקות" נגמרות רק אחרי ש"פיתוח" נגמר, גם אם התחילו באמצע.</p>
+    <svg viewBox="0 0 600 120" role="img" aria-label="פס א' ופס ב' נגמרים באותו יום">
+      <defs><marker id="m3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" class="ah"/></marker></defs>
+      <rect x="40" y="18" width="420" height="30" rx="8" class="t-a"/><text x="450" y="38" text-anchor="end" class="lbl">א' · פיתוח</text>
+      <rect x="250" y="72" width="210" height="30" rx="8" class="t-b"/><text x="450" y="92" text-anchor="end" class="lbl">ב' · בדיקות</text>
+      <path d="M460 33 H484 V87 H462" class="arr" marker-end="url(#m3)"/>
+    </svg>
+  </section>
+
+  <section class="card na">
+    <h2>התחלה ← סיום <span class="code">SF · Start-to-Finish</span> <span class="badge">לא זמין ב-Ganty</span></h2>
+    <p class="rule">ב' נגמרת רק אחרי שא' התחילה.</p>
+    <p class="ex">דוגמה: "השרת הישן" ממשיך לעבוד עד ש"השרת החדש" מתחיל. נדיר מאוד ומבלבל, ולכן לא נכלל. כמעט תמיד אפשר לתאר את אותו מצב עם FS.</p>
+    <svg viewBox="0 0 600 120" role="img" aria-label="פס ב' נגמר כשפס א' מתחיל">
+      <defs><marker id="m4" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" class="ah"/></marker></defs>
+      <rect x="320" y="18" width="240" height="30" rx="8" class="t-a"/><text x="550" y="38" text-anchor="end" class="lbl">א' · שרת חדש</text>
+      <rect x="40" y="72" width="280" height="30" rx="8" class="t-b"/><text x="310" y="92" text-anchor="end" class="lbl">ב' · שרת ישן</text>
+      <path d="M320 33 H300 V60 H336 V87 H322" class="arr" marker-end="url(#m4)"/>
+    </svg>
+  </section>
+
+  <section class="card">
+    <h2>ימי המתנה (מרווח)</h2>
+    <p class="rule">בכל סוג אפשר להוסיף מרווח: כמה ימים לחכות אחרי התנאי.</p>
+    <p class="ex">דוגמה: "צביעה" מתחילה יומיים אחרי ש"טיח" נגמר, כדי שיתייבש. על החץ יופיע <span class="code">FS+2</span>. מספר שלילי מאפשר להתחיל מוקדם יותר, למשל <span class="code">FS-1</span>: יום לפני הסוף.</p>
+    <svg viewBox="0 0 600 120" role="img" aria-label="פס ב' מתחיל יומיים אחרי סוף פס א'">
+      <defs><marker id="m5" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" class="ah"/></marker></defs>
+      <rect x="40" y="18" width="200" height="30" rx="8" class="t-a"/><text x="230" y="38" text-anchor="end" class="lbl">א' · טיח</text>
+      <rect x="330" y="72" width="210" height="30" rx="8" class="t-b"/><text x="530" y="92" text-anchor="end" class="lbl">ב' · צביעה</text>
+      <rect x="240" y="72" width="90" height="30" rx="6" class="gap"/><text x="285" y="92" text-anchor="middle" class="small">2 ימים</text>
+      <path d="M240 33 H254 V60 H316 V87 H328" class="arr" marker-end="url(#m5)"/>
+    </svg>
+  </section>
+
+  <section class="card">
+    <h2>✋ סיום ידני</h2>
+    <p class="rule">המשך של המשימה הוא הערכה בלבד. היא נגמרת רק כשמסמנים "בוצע".</p>
+    <p class="ex">אם עבר תאריך הסיום והמשימה עוד לא סומנה, הפס מתארך עד היום (החלק המפוספס), וכל מה שמחכה לה ב-FS או ב-FF נדחף קדימה איתה. מסמנים לכל משימה בנפרד, בטופס העריכה.</p>
+    <svg viewBox="0 0 600 120" role="img" aria-label="פס א' מתארך עד היום, ופס ב' נדחף">
+      <defs>
+        <marker id="m6" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" class="ah"/></marker>
+        <pattern id="hatch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="9" fill="rgba(255,255,255,.5)"/></pattern>
+      </defs>
+      <rect x="40" y="18" width="300" height="30" rx="8" class="t-a"/><rect x="220" y="18" width="120" height="30" fill="url(#hatch)"/>
+      <text x="210" y="38" text-anchor="end" class="lbl">✋ א'</text>
+      <line x1="340" y1="6" x2="340" y2="114" stroke="var(--arrow)" stroke-dasharray="4 3"/><text x="346" y="14" class="small">היום</text>
+      <text x="220" y="62" text-anchor="middle" class="small">סוף מתוכנן</text>
+      <rect x="370" y="72" width="190" height="30" rx="8" class="t-b"/><text x="550" y="92" text-anchor="end" class="lbl">ב' · נדחפה</text>
+      <path d="M340 33 H354 V87 H368" class="arr" marker-end="url(#m6)"/>
+    </svg>
+  </section>
+
+  <section class="card">
+    <h2>איך יוצרים ועורכים תלות</h2>
+    <table>
+      <tr><th>במחשב</th><td>מעבירים את העכבר על פס, ומופיעה נקודה ⚬ בקצה שלו. גוררים ממנה קו לפס אחר. נוצרת תלות FS.</td></tr>
+      <tr><th>בטלפון</th><td>פותחים משימה, ובחלק "מתחילה אחרי" בוחרים משימה, סוג ומספר ימי המתנה, ולוחצים ＋.</td></tr>
+      <tr><th>עריכה</th><td>לחיצה על החץ או על התווית שעליו (למשל FS+2) פותחת חלון לשינוי הסוג, המרווח או מחיקה.</td></tr>
+      <tr><th>הזזה</th><td>משימה שמתעכבת דוחפת קדימה את מה שמחכה לה. משימה שמוקדמת לא מושכת אחריה את האחרות, אבל אי אפשר להזיז משימה לפני מה שהיא מחכה לו.</td></tr>
+    </table>
+  </section>
+
+  <p><a href="./">← חזרה ל-Ganty</a></p>
+</main>
+</body>
+</html>
