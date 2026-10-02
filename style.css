@@ -354,3 +354,8 @@ fieldset.deps legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
     border-radius: 16px; padding: 12px 16px; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); align-items: center; gap: 6px;
   }
 }
+
+/* Milestone → calendar */
+.cal-box { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cal-box select { flex: 1; min-width: 140px; }
+.cal-box select:disabled { opacity: .5; }

@@ -6,7 +6,8 @@
  */
 
 const CFG = window.GANTY_CONFIG || {};
-const SCOPES = 'https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/drive.file'
+  + ' https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events';
 const GANTT_LIST = 'משימות לגנט';
 const PROJECT_TAG = '#פרויקט:';
 const COLORS = ['#4F7A63', '#1E6FD9', '#6750A4', '#0E8C80', '#D9822B', '#C2410C', '#B4235A', '#64748B'];
@@ -880,6 +881,11 @@ function openTaskEditor(t) {
       <label>תגיות<input type="text" name="tags" value="${esc((t.tags || []).map((g) => '#' + g).join(' '))}" placeholder="#עיצוב #ספק" list="tagList">
         <datalist id="tagList">${allTags().map((g) => `<option value="#${esc(g)}">`).join('')}</datalist></label>
       <label class="check"><input type="checkbox" name="milestone" ${t.milestone ? 'checked' : ''}> אבן דרך ◆ (יום אחד)</label>
+      <div id="calBox" class="cal-box">
+        <label class="check"><input type="checkbox" name="cal" ${t.calId ? 'checked' : ''}> 📅 שמור ביומן</label>
+        <select name="calId" id="calSel"><option value="${esc(t.calId || data.lastCalId || 'primary')}">${esc(t.calName || data.lastCalName || 'היומן הראשי')}</option></select>
+      </div>
+      <p class="note" id="calNote" hidden></p>
       <div class="row2">
         <label>התחלה<input type="date" name="start" value="${t.start}" required></label>
         <label id="endBox">סיום<input type="date" name="end" value="${t.end}"></label>
@@ -962,6 +968,15 @@ function openTaskEditor(t) {
     const w = fd.get('who');
     t.assignee = w === '__other' ? (fd.get('whoName') || '').trim() || null : w || null;
     t.milestone = fd.get('milestone') === 'on';
+    // "שמור ביומן": a milestone gets an all-day event in the chosen Google calendar.
+    if (t.milestone && fd.get('cal') === 'on') {
+      const sel = form.querySelector('#calSel');
+      t.calId = fd.get('calId') || 'primary';
+      t.calName = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : null;
+      data.lastCalId = t.calId; data.lastCalName = t.calName;
+    } else {
+      t.calId = null; t.calName = null;
+    }
     t.start = start;
     t.end = t.milestone ? start : (end < start ? start : end);
     const num = (v) => (v === '' || v == null ? null : Math.max(0, Number(v)));
@@ -1002,11 +1017,15 @@ function openTaskEditor(t) {
     f.progress.oninput = () => { f.querySelector('#pv').textContent = `${f.progress.value}%`; };
     const shape = () => {
       const ms = f.milestone.checked;
+      f.querySelector('#calBox').hidden = !ms;
+      f.querySelector('#calNote').hidden = !ms || !f.querySelector('#calNote').textContent;
+      f.querySelector('#calSel').disabled = !f.cal.checked;
       f.querySelector('#endBox').hidden = ms;
       f.querySelector('#workBox').hidden = ms;
       f.querySelector('#whyBox').hidden = !['waiting', 'blocked'].includes(f.status.value);
     };
-    f.milestone.onchange = shape; f.status.onchange = shape; shape();
+    f.milestone.onchange = shape; f.status.onchange = shape; f.cal.onchange = shape; shape();
+    fillCalendars(f, t, shape);
     f.who.onchange = () => { f.querySelector('#otherWho').hidden = f.who.value !== '__other'; };
     const hoursColor = () => {
       const est = Number(f.hEst.value), act = Number(f.hAct.value);
@@ -1386,7 +1405,7 @@ function updateSignIn() {
 
 $('#signInBtn').onclick = () => tokenClient && tokenClient.requestAccessToken({ prompt: localStorage.getItem('ganty-signed') ? '' : 'consent' });
 
-function showBanner(text) { const b = $('#banner'); b.textContent = text; b.hidden = !text; }
+function showBanner(text) { const b = $('#banner'); b.textContent = text; b.hidden = !text; b.onclick = null; b.style.cursor = ''; }
 
 async function api(method, url, body, raw) {
   if (!token) throw new Error('no-token');
@@ -1640,6 +1659,85 @@ async function syncDrive() {
   data.dirty = false;
 }
 
+// ---------------------------------------------------------------- Google Calendar: milestones
+const CAL = 'https://www.googleapis.com/calendar/v3';
+let calendars = null; // [{id, name}] once loaded
+
+/** Fills the calendar choice in the task editor (the user's calendars he can write to). */
+async function fillCalendars(f, t, shape) {
+  const sel = f.querySelector('#calSel'), note = f.querySelector('#calNote');
+  const say = (html) => { note.innerHTML = html; shape(); };
+  if (!token) return say('כדי לשמור ביומן צריך להתחבר ל-Google.');
+  try {
+    if (!calendars) {
+      const r = await api('GET', `${CAL}/users/me/calendarList?minAccessRole=writer&fields=items(id,summary,summaryOverride,primary)`);
+      calendars = (r.items || []).map((c) => ({ id: c.primary ? 'primary' : c.id, name: c.summaryOverride || c.summary || c.id }))
+        .sort((a, b) => (a.id === 'primary' ? -1 : b.id === 'primary' ? 1 : 0));
+    }
+    const want = t.calId || data.lastCalId || 'primary';
+    sel.innerHTML = calendars.map((c) => `<option value="${esc(c.id)}" ${c.id === want ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+    say('');
+  } catch (e) {
+    if (e.message === '403') say('אין עדיין גישה ליומן. <button type="button" class="small" id="calAllow">אשר גישה ליומן</button>');
+    else say('לא הצלחתי לטעון את היומנים. אפשר לשמור, והאירוע ייכנס ליומן שנבחר.');
+    const b = note.querySelector('#calAllow');
+    if (b) b.onclick = () => tokenClient && tokenClient.requestAccessToken({ prompt: 'consent' });
+  }
+}
+
+const calUrl = (calId, eventId) => `${CAL}/calendars/${encodeURIComponent(calId)}/events${eventId ? '/' + encodeURIComponent(eventId) : ''}`;
+async function calDelete(calId, eventId) {
+  try { await api('DELETE', calUrl(calId, eventId)); } catch (e) { if (!['404', '410'].includes(e.message)) throw e; }
+}
+
+/** The event a milestone should have: all day, on its date. */
+function calBody(t) {
+  const p = project(t.projectId);
+  return {
+    summary: `${t.done ? '✅ ' : ''}◆ אבן דרך: ${t.title || '(ללא כותרת)'} · Ganty${p ? ' · ' + p.name : ''}`,
+    description: `אבן דרך${p ? ` בפרויקט "${p.name}"` : ''} בלוח הגאנט Ganty.\nhttps://shukiy909.github.io/ganty`,
+    start: { date: t.start },
+    end: { date: addDays(t.start, 1) },
+    transparency: 'transparent',
+  };
+}
+
+/**
+ * Keeps the calendar in step with the board: creates, moves or removes the events of milestones marked "שמור ביומן".
+ * Untick / not a milestone / back to the pool / deleted → the event is removed.
+ */
+async function syncCalendar() {
+  let changed = false;
+  for (const t of data.tasks) {
+    const want = !t.deleted && t.milestone && t.calId && t.scheduled && t.projectId && t.start;
+    if (t.calEventId && (!want || t.calEventCal !== t.calId)) {
+      await calDelete(t.calEventCal || 'primary', t.calEventId);
+      t.calEventId = null; t.calEventCal = null; t.calStamp = null; changed = true;
+    }
+    if (!want) continue;
+    const body = calBody(t), stamp = JSON.stringify(body);
+    if (t.calEventId && t.calStamp === stamp) continue;
+    if (t.calEventId) {
+      try { await api('PUT', calUrl(t.calId, t.calEventId), body); } catch (e) {
+        if (['404', '410'].includes(e.message)) t.calEventId = null; else throw e;
+      }
+    }
+    if (!t.calEventId) {
+      const ev = await api('POST', calUrl(t.calId), body);
+      t.calEventId = ev.id; t.calEventCal = t.calId;
+    }
+    t.calStamp = stamp; changed = true;
+  }
+  if (changed) { data.updatedAt = Date.now(); data.dirty = true; }
+}
+
+/** The calendar needs a permission the user didn't give yet: a banner he can tap. */
+function showCalBanner(text) {
+  const b = $('#banner');
+  b.textContent = text; b.hidden = false; b.style.cursor = 'pointer';
+  b.onclick = () => { b.onclick = null; b.style.cursor = ''; tokenClient && tokenClient.requestAccessToken({ prompt: 'consent' }); };
+}
+
 // ---------------------------------------------------------------- sync
 let syncTimer = null, syncing = false, again = false;
 function scheduleSync() {
@@ -1655,13 +1753,23 @@ async function syncNow() {
   setStatus('מסנכרן…');
   try {
     await syncDrive(); // first: maybe a newer copy from another device
+    // Calendar before Google Tasks: deleted milestones still need their event removed.
+    let calProblem = '';
+    if (data.tasks.some((t) => t.calId || t.calEventId)) {
+      try { await syncCalendar(); } catch (e) {
+        if (e.message === 'expired' || e.message === 'no-token') throw e;
+        calProblem = e.message === '403'
+          ? '📅 כדי לשמור אבני דרך ביומן צריך לאשר גישה ל-Google Calendar. לחץ כאן.'
+          : '📅 העדכון ביומן נכשל, ננסה שוב בסנכרון הבא.';
+      }
+    }
     const before = JSON.stringify(data.tasks);
     await syncTasks();
     if (JSON.stringify(data.tasks) !== before) { data.updatedAt = Date.now(); data.dirty = true; }
     if (data.dirty) await syncDrive();
     localStorage.setItem(LS_DATA, JSON.stringify(data));
     setStatus(`נשמר ב-Drive ✓ ${new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`);
-    showBanner('');
+    if (calProblem.includes('לחץ כאן')) showCalBanner(calProblem); else showBanner(calProblem);
     render();
   } catch (e) {
     if (e.message === 'expired' || e.message === 'no-token') updateSignIn();
