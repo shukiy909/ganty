@@ -64,7 +64,11 @@ const depLabel = (d) => `${d.type || 'FS'}${d.lag ? (d.lag > 0 ? '+' : '') + d.l
 /** Where a task really ends: a "manual finish" task that is late keeps growing until it is marked done. */
 function effEnd(t) {
   const e = dayNum(t.end);
-  return t.manualFinish && !t.done && !t.milestone ? Math.max(e, dayNum(todayIso())) : e;
+  if (!t.manualFinish || t.done || t.milestone) return e;
+  const p = project(t.projectId);
+  // A frozen project's clock stops on the day it was frozen.
+  const now = p && p.frozen ? Math.min(dayNum(todayIso()), dayNum(p.frozen.since)) : dayNum(todayIso());
+  return Math.max(e, now);
 }
 
 /** Tasks in an order where every task comes after the ones it depends on. */
@@ -97,6 +101,8 @@ function applyConstraints() {
   const ids = new Set(sched.map((t) => t.id));
   for (const t of topo(sched)) {
     if (!t.deps || !t.deps.length || t.done) continue;
+    const tp = project(t.projectId);
+    if (tp && tp.frozen) continue; // nothing moves while the project is frozen
     let minStart = -Infinity, minEnd = -Infinity;
     for (const d of t.deps) {
       if (!ids.has(d.from)) continue;
@@ -192,6 +198,48 @@ function allWho() {
   return [...names];
 }
 
+/** Progress (weighted by length), first and last day, and whether it will miss its target date. */
+function projectStats(p) {
+  const ts = data.tasks.filter((t) => t.scheduled && !t.deleted && t.projectId === p.id);
+  if (!ts.length) return { pct: 0, start: null, end: null, count: 0, late: false, tasks: ts };
+  let w = 0, sum = 0;
+  for (const t of ts) {
+    if (t.milestone) continue;
+    const d = effEnd(t) - dayNum(t.start) + 1;
+    w += d; sum += d * (t.done ? 100 : (t.progress || 0));
+  }
+  const pct = w ? Math.round(sum / w) : (ts.every((t) => t.done) ? 100 : 0);
+  const start = Math.min(...ts.map((t) => dayNum(t.start))), end = Math.max(...ts.map(effEnd));
+  return { pct, start, end, count: ts.length, late: !!p.target && end > dayNum(p.target), tasks: ts };
+}
+
+function freezeProject(p, why) {
+  p.frozen = { since: todayIso(), why: why || '' };
+  (p.freezeLog = p.freezeLog || []).unshift({ type: 'freeze', date: todayIso(), why: why || '' });
+  commit();
+}
+
+/**
+ * Thaw: what hadn't started moves forward by the frozen days;
+ * what had started keeps its start and only its end moves (the bar grows: the work was cut in the middle).
+ */
+function thawProject(p) {
+  if (!p.frozen) return;
+  const since = dayNum(p.frozen.since), days = Math.max(0, dayNum(todayIso()) - since);
+  if (days > 0) {
+    for (const t of data.tasks) {
+      if (t.projectId !== p.id || !t.scheduled || t.deleted || t.done) continue;
+      const s = dayNum(t.start), e = dayNum(t.end);
+      if (s >= since) { t.start = isoOf(s + days); t.end = isoOf(e + days); }
+      else t.end = isoOf(Math.max(e, since) + days);
+      markGoogle(t);
+    }
+  }
+  (p.freezeLog = p.freezeLog || []).unshift({ type: 'thaw', date: todayIso(), days });
+  p.frozen = null;
+  commit();
+}
+
 function newProject(name, color) {
   const p = { id: uid(), name: name.trim() || 'פרויקט', color: color || COLORS[data.projects.length % COLORS.length], stages: [{ id: uid(), name: 'כללי' }] };
   data.projects.push(p);
@@ -211,9 +259,15 @@ function renderHeader() {
   const sel = $('#projectSelect');
   const cur = current();
   // With no projects yet, a placeholder is selected, so choosing "＋ פרויקט חדש" counts as a change.
-  sel.innerHTML = (cur ? '' : '<option value="" selected disabled>אין פרויקטים</option>') + data.projects.map((p) => `<option value="${p.id}" ${cur && p.id === cur.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
+  const all = ui.view === 'all' && data.projects.length;
+  sel.innerHTML = (cur ? '' : '<option value="" selected disabled>אין פרויקטים</option>')
+    + (data.projects.length > 1 || all ? `<option value="__all" ${all ? 'selected' : ''}>📊 כל הפרויקטים</option>` : '')
+    + data.projects.map((p) => `<option value="${p.id}" ${!all && cur && p.id === cur.id ? 'selected' : ''}>${p.frozen ? '❄️ ' : ''}${esc(p.name)}</option>`).join('')
     + `<option value="__new">＋ פרויקט חדש</option>`;
-  $('#projectMenuBtn').disabled = !cur;
+  const af = $('#allFilter');
+  af.hidden = !all;
+  af.value = ui.allFilter || 'active';
+  $('#projectMenuBtn').disabled = !cur || all;
   const wf = $('#whoFilter');
   wf.innerHTML = `<option value="all">כל האחראים</option><option value="none">ללא אחראי</option>`
     + allWho().map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
@@ -256,13 +310,14 @@ function renderPool() {
 }
 
 /** The board's date range: a little before the first task (or today) to well after the last. */
-function range(tasks) {
+function range(tasks, extraDays = []) {
   const t0 = dayNum(todayIso());
   let a = t0 - 14, b = t0 + 75;
   for (const t of tasks) {
     if (t.start) a = Math.min(a, dayNum(t.start) - 10);
-    if (t.end) b = Math.max(b, dayNum(t.end) + 30);
+    if (t.end) b = Math.max(b, effEnd(t) + 30);
   }
+  for (const d of extraDays) { a = Math.min(a, d - 10); b = Math.max(b, d + 20); }
   a -= weekday(a); // start on a Sunday
   return { a, b, days: b - a + 1 };
 }
@@ -274,7 +329,9 @@ function renderBoard() {
   const g = $('#gantt');
   const cur = current();
   const keepLeft = g.scrollLeft, keepTop = g.scrollTop;
-  const hint = $('#emptyHint');
+  const hint = $('#emptyHint'), note = $('#boardNote');
+  note.hidden = true;
+  g.classList.remove('is-frozen');
   if (!cur) {
     g.innerHTML = '';
     hint.hidden = false;
@@ -282,14 +339,18 @@ function renderBoard() {
     $('#firstProject').onclick = () => openProjectDialog(null);
     return;
   }
-  const tasks = data.tasks.filter((t) => t.scheduled && !t.deleted && t.projectId === cur.id);
-  R = range(tasks);
-  const dw = ui.dw, W = R.days * dw;
+  const all = ui.view === 'all';
+  const filter = ui.allFilter || 'active';
+  const projects = all ? data.projects.filter((p) => filter === 'all' || (filter === 'frozen' ? !!p.frozen : !p.frozen)) : [cur];
+  const tasks = data.tasks.filter((t) => t.scheduled && !t.deleted && projects.some((p) => p.id === t.projectId));
+  R = range(tasks, projects.map((p) => p.target).filter(Boolean).map(dayNum));
+  const dw = ui.dw, W = R.days * dw, LW = labelWidth();
   const today = dayNum(todayIso());
 
   // Scale: two rows that change with the zoom.
   const top = [], bot = [];
   const mode = dw >= 28 ? 'day' : dw >= 9 ? 'week' : 'month';
+  const cell = (cls, n, text, len) => `<div class="cell ${cls}" style="left:${(n - R.a) * dw}px;${len ? `width:${len * dw}px` : ''}">${esc(text)}</div>`;
   if (mode === 'month') {
     for (let n = R.a; n <= R.b; n++) {
       const d = new Date(n * 864e5);
@@ -306,81 +367,129 @@ function renderBoard() {
       else if (weekday(n) === 0) bot.push(cell('bot-row', n, short(isoOf(n)), 7));
     }
   }
-  function cell(cls, n, text, len) {
-    const left = (n - R.a) * dw;
-    const width = len ? len * dw : 'auto';
-    return `<div class="cell ${cls}" style="left:${left}px;${len ? `width:${width}px` : ''}">${esc(text)}</div>`;
-  }
 
   // Grid lines: one per day (or week / month when zoomed out).
   const step = mode === 'day' ? dw : mode === 'week' ? dw * 7 : dw * 30.44;
   const grid = `background-image: repeating-linear-gradient(to right, var(--line-soft) 0 1px, transparent 1px ${step}px);`;
 
-  // Rows: a stage row, then its tasks (sorted by start).
-  const rows = [];
-  const crit = ui.critical ? criticalSet(tasks) : new Set();
+  const crit = new Set();
+  if (ui.critical) for (const p of projects) criticalSet(tasks.filter((t) => t.projectId === p.id)).forEach((id) => crit.add(id));
   const dimmed = (t) => (ui.critical && !crit.has(t.id))
     || (ui.assignee && ui.assignee !== 'all' && (t.assignee || '') !== (ui.assignee === 'none' ? '' : ui.assignee))
     || (ui.tag && ui.tag !== 'all' && !(t.tags || []).includes(ui.tag));
-  for (const st of cur.stages) {
-    const items = tasks.filter((t) => (t.stageId || cur.stages[0].id) === st.id).sort((x, y) => (x.start < y.start ? -1 : 1));
-    const collapsed = !!ui.collapsed[st.id];
-    let span = '';
-    if (items.length) {
-      const s = Math.min(...items.map((t) => dayNum(t.start))), e = Math.max(...items.map(effEnd));
-      span = `<div class="stage-span" style="left:${(s - R.a) * dw}px;width:${(e - s + 1) * dw}px;background:${cur.color}"></div>`;
+
+  /** One task row: a bar (or a ◆ milestone) and the ⚬ dot for making dependencies. */
+  const taskRow = (t, p, stageId) => {
+    const s0 = dayNum(t.start), left = (s0 - R.a) * dw;
+    const cls = [t.done ? 'done' : '', crit.has(t.id) ? 'crit' : '', dimmed(t) ? 'dim' : '', t.manualFinish ? 'manual' : ''].join(' ');
+    const marks = `${t.priority === 'high' ? '<span class="prio" title="עדיפות גבוהה"></span>' : ''}${(t.files || []).length ? `<span class="clip" title="${t.files.length} קבצים">📎${t.files.length}</span>` : ''}`;
+    const flag = !t.done && t.status === 'blocked' ? '⛔ ' : !t.done && t.status === 'waiting' ? '⏸ ' : '';
+    const who = t.assignee ? `<span class="who" style="background:${whoColor(t.assignee)}" title="אחראי: ${esc(t.assignee)}">${esc(initials(t.assignee))}</span>` : '';
+    const name = `${t.milestone ? '◆ ' : ''}${esc(t.title || '(ללא כותרת)')}`;
+    let shape, right;
+    if (t.milestone) {
+      shape = `<div class="ms ${cls}" data-bar="${t.id}" style="left:${left + dw / 2 - 9}px;--c:${p.color}" title="◆ ${esc(t.title)} · ${short(t.start)}${t.assignee ? ` · ${esc(t.assignee)}` : ''}">
+        <i></i>${who}<span class="ms-txt">${flag}${esc(t.title)}</span>${marks}</div>`;
+      right = left + dw / 2 + 10;
+    } else {
+      const ee = effEnd(t), width = (ee - s0 + 1) * dw, planned = (dayNum(t.end) - s0 + 1) * dw;
+      const pct = t.done ? 100 : (t.progress || 0);
+      const late = ee > dayNum(t.end) ? `<div class="late" style="left:${planned}px"></div>` : '';
+      const tip = `${esc(t.title)} · ${short(t.start)}–${short(isoOf(ee))} · ${pct}%${t.assignee ? ` · ${esc(t.assignee)}` : ''}${t.manualFinish ? (t.done ? ' · סיום ידני' : ' · סיום ידני: מחכה לסימון "בוצע"') : ''}`;
+      shape = `<div class="bar ${cls}" data-bar="${t.id}" style="left:${left}px;width:${width}px;--c:${p.color}" title="${tip}">
+          <div class="fill" style="width:${pct}%"></div>${late}${who}
+          <div class="txt">${flag}${t.manualFinish && !t.done ? '✋ ' : ''}${esc(t.title)}${width > 90 ? ` · ${pct}%` : ''}</div>${marks}
+          <div class="h l" data-edge="l"></div><div class="h r" data-edge="r"></div>
+        </div>`;
+      right = left + width;
     }
-    rows.push(`<div class="g-row stage" data-stage="${st.id}">
-      <div class="g-label" data-stage-toggle="${st.id}">${collapsed ? '◂' : '▾'} ${esc(st.name)} <span class="count">(${items.length})</span></div>
-      <div class="g-track" style="width:${W}px;${grid}">${span}</div></div>`);
-    if (collapsed) continue;
-    for (const t of items) {
-      const s0 = dayNum(t.start), left = (s0 - R.a) * dw;
-      const cls = [t.done ? 'done' : '', crit.has(t.id) ? 'crit' : '', dimmed(t) ? 'dim' : '', t.manualFinish ? 'manual' : ''].join(' ');
-      const marks = `${t.priority === 'high' ? '<span class="prio" title="עדיפות גבוהה"></span>' : ''}${(t.files || []).length ? `<span class="clip" title="${t.files.length} קבצים">📎${t.files.length}</span>` : ''}`;
-      const flag = !t.done && t.status === 'blocked' ? '⛔ ' : !t.done && t.status === 'waiting' ? '⏸ ' : '';
-      const who = t.assignee ? `<span class="who" style="background:${whoColor(t.assignee)}" title="אחראי: ${esc(t.assignee)}">${esc(initials(t.assignee))}</span>` : '';
-      const name = `${t.milestone ? '◆ ' : ''}${esc(t.title || '(ללא כותרת)')}`;
-      let shape, right;
-      if (t.milestone) {
-        shape = `<div class="ms ${cls}" data-bar="${t.id}" style="left:${left + dw / 2 - 9}px;--c:${cur.color}" title="◆ ${esc(t.title)} · ${short(t.start)}${t.assignee ? ` · ${esc(t.assignee)}` : ''}">
-          <i></i>${who}<span class="ms-txt">${flag}${esc(t.title)}</span>${marks}</div>`;
-        right = left + dw / 2 + 10;
-      } else {
-        const ee = effEnd(t), width = (ee - s0 + 1) * dw, planned = (dayNum(t.end) - s0 + 1) * dw;
-        const pct = t.done ? 100 : (t.progress || 0);
-        const late = ee > dayNum(t.end) ? `<div class="late" style="left:${planned}px"></div>` : '';
-        const tip = `${esc(t.title)} · ${short(t.start)}–${short(isoOf(ee))} · ${pct}%${t.assignee ? ` · ${esc(t.assignee)}` : ''}${t.manualFinish ? (t.done ? ' · סיום ידני' : ' · סיום ידני: מחכה לסימון "בוצע"') : ''}`;
-        shape = `<div class="bar ${cls}" data-bar="${t.id}" style="left:${left}px;width:${width}px;--c:${cur.color}" title="${tip}">
-            <div class="fill" style="width:${pct}%"></div>${late}${who}
-            <div class="txt">${flag}${t.manualFinish && !t.done ? '✋ ' : ''}${esc(t.title)}${width > 90 ? ` · ${pct}%` : ''}</div>${marks}
-            <div class="h l" data-edge="l"></div><div class="h r" data-edge="r"></div>
-          </div>`;
-        right = left + width;
+    return `<div class="g-row ${p.frozen ? 'frozen' : ''}" data-project="${p.id}" data-stage="${stageId}" data-task="${t.id}">
+      <div class="g-label"><span class="name" data-open="${t.id}">${name}</span></div>
+      <div class="g-track" style="width:${W}px;${grid}">${shape}
+        <div class="link-dot" data-link="${t.id}" style="left:${right + 3}px" title="גרור לפס אחר כדי ליצור תלות"></div></div></div>`;
+  };
+
+  const rows = [];
+  if (!all) {
+    // One project: a row per stage, then its tasks (sorted by start).
+    for (const st of cur.stages) {
+      const items = tasks.filter((t) => (t.stageId || cur.stages[0].id) === st.id).sort((x, y) => (x.start < y.start ? -1 : 1));
+      const collapsed = !!ui.collapsed[st.id];
+      let span = '';
+      if (items.length) {
+        const s = Math.min(...items.map((t) => dayNum(t.start))), e = Math.max(...items.map(effEnd));
+        span = `<div class="stage-span" style="left:${(s - R.a) * dw}px;width:${(e - s + 1) * dw}px;background:${cur.color}"></div>`;
       }
-      rows.push(`<div class="g-row" data-stage="${st.id}" data-task="${t.id}">
-        <div class="g-label"><span class="name" data-open="${t.id}">${name}</span></div>
-        <div class="g-track" style="width:${W}px;${grid}">${shape}
-          <div class="link-dot" data-link="${t.id}" style="left:${right + 3}px" title="גרור לפס אחר כדי ליצור תלות"></div></div></div>`);
+      rows.push(`<div class="g-row stage" data-project="${cur.id}" data-stage="${st.id}">
+        <div class="g-label" data-stage-toggle="${st.id}">${collapsed ? '◂' : '▾'} ${esc(st.name)} <span class="count">(${items.length})</span></div>
+        <div class="g-track" style="width:${W}px;${grid}">${span}</div></div>`);
+      if (collapsed) continue;
+      for (const t of items) rows.push(taskRow(t, cur, st.id));
     }
-  }
-  // Spare rows, so there is always room to drop.
-  for (let i = 0; i < 3; i++) {
-    rows.push(`<div class="g-row" data-stage="${cur.stages[cur.stages.length - 1].id}"><div class="g-label"></div><div class="g-track" style="width:${W}px;${grid}"></div></div>`);
+    for (let i = 0; i < 3; i++) {
+      rows.push(`<div class="g-row" data-project="${cur.id}" data-stage="${cur.stages[cur.stages.length - 1].id}"><div class="g-label"></div><div class="g-track" style="width:${W}px;${grid}"></div></div>`);
+    }
+  } else {
+    // All projects: a summary bar per project; tap to open its tasks right here.
+    ui.expanded = ui.expanded || {};
+    for (const p of projects) {
+      const st = projectStats(p), open = !!ui.expanded[p.id];
+      let track = '';
+      if (st.count) {
+        const left = (st.start - R.a) * dw, width = (st.end - st.start + 1) * dw;
+        track += `<div class="sum-bar" style="left:${left}px;width:${width}px;--c:${p.color}" title="${esc(p.name)} · ${short(isoOf(st.start))}–${short(isoOf(st.end))} · ${st.pct}%">
+          <div class="fill" style="width:${st.pct}%"></div><div class="txt">${esc(p.name)} · ${st.pct}%</div></div>`;
+        for (const m of st.tasks.filter((t) => t.milestone)) {
+          track += `<div class="sum-ms" style="left:${(dayNum(m.start) - R.a) * dw + dw / 2 - 6}px;--c:${p.color}" title="◆ ${esc(m.title)} · ${short(m.start)}"></div>`;
+        }
+      }
+      if (p.target) track += `<div class="target-tick" style="left:${(dayNum(p.target) - R.a + 1) * dw}px" title="יעד: ${short(p.target)}"></div>`;
+      rows.push(`<div class="g-row projrow ${p.frozen ? 'frozen' : ''}" data-project="${p.id}" data-stage="${p.stages[0].id}">
+        <div class="g-label"><span class="pdot" style="background:${p.color}"></span>
+          <span class="name" data-toggle-proj="${p.id}">${open ? '▾' : '◂'} ${esc(p.name)}</span>
+          <span class="count">${st.pct}%</span>${st.late ? '<span title="צפוי להסתיים אחרי היעד">⚠️</span>' : ''}${p.frozen ? '<span title="מוקפא">❄️</span>' : ''}
+          <button type="button" class="mini-open" data-open-proj="${p.id}">פתח</button></div>
+        <div class="g-track" style="width:${W}px;${grid}">${track}</div></div>`);
+      if (!open) continue;
+      const order = new Map(p.stages.map((x, i) => [x.id, i]));
+      st.tasks.slice().sort((x, y) => ((order.get(x.stageId) ?? 0) - (order.get(y.stageId) ?? 0)) || (x.start < y.start ? -1 : 1))
+        .forEach((t) => rows.push(taskRow(t, p, t.stageId || p.stages[0].id)));
+    }
   }
 
-  g.innerHTML = `<div class="g-inner" style="width:${labelWidth() + W}px">
-    <div class="g-head"><div class="g-corner"><div>${esc(cur.name)}${(() => {
-      const c = costs(data.tasks.filter((t) => t.projectId === cur.id && !t.deleted));
-      return c.plan || c.act ? `<div class="cost-sum ${c.act > c.plan ? 'over' : ''}" title="עלות מתוכננת מול בפועל">${money(c.act)} מתוך ${money(c.plan)}</div>` : '';
-    })()}</div></div><div class="g-scale" style="width:${W}px">${top.join('')}${bot.join('')}</div></div>
+  // Corner: the project's numbers (or how many projects are shown).
+  let corner;
+  if (all) {
+    corner = `<div>כל הפרויקטים</div><div class="cost-sum">${projects.length} פרויקטים</div>`;
+  } else {
+    const st = projectStats(cur), c = costs(data.tasks.filter((t) => t.projectId === cur.id && !t.deleted));
+    corner = `<div>${cur.frozen ? '❄️ ' : ''}${esc(cur.name)}</div>`
+      + (st.count || cur.target ? `<div class="cost-sum ${st.late ? 'over' : ''}">${st.count ? `${st.pct}% · סיום ${short(isoOf(st.end))}` : ''}${cur.target ? ` · יעד ${short(cur.target)}${st.late ? ' ⚠️' : ''}` : ''}</div>` : '')
+      + (c.plan || c.act ? `<div class="cost-sum ${c.act > c.plan ? 'over' : ''}" title="עלות מתוכננת מול בפועל">${money(c.act)} מתוך ${money(c.plan)}</div>` : '');
+  }
+
+  const target = !all && cur.target ? `<div class="g-target" style="left:${LW + (dayNum(cur.target) - R.a + 1) * dw}px" title="יעד הפרויקט: ${short(cur.target)}"></div>` : '';
+  g.innerHTML = `<div class="g-inner" style="width:${LW + W}px">
+    <div class="g-head"><div class="g-corner"><div>${corner}</div></div><div class="g-scale" style="width:${W}px">${top.join('')}${bot.join('')}</div></div>
     <div class="g-body">${rows.join('')}</div>
-    <div class="g-today" style="left:${labelWidth() + (today - R.a) * dw + dw / 2}px"></div>
+    <div class="g-today" style="left:${LW + (today - R.a) * dw + dw / 2}px"></div>${target}
   </div>`;
 
+  const inner = g.querySelector('.g-inner'), head = g.querySelector('.g-head');
+  inner.style.setProperty('--head-h', `${head.offsetHeight}px`); // the "היום" / "יעד" tags sit just under the header
   drawArrows(tasks);
-  hint.hidden = tasks.length > 0;
-  hint.innerHTML = 'הלוח ריק.<br>גרור לכאן משימה מהמאגר, או לחץ על משימה במאגר ובחר "שבץ בלוח".';
+  if (!all && cur.frozen) {
+    g.classList.add('is-frozen');
+    note.hidden = false;
+    note.textContent = `❄️ מוקפא מ-${short(cur.frozen.since)}${cur.frozen.why ? ` · ${cur.frozen.why}` : ''} · ⋮ ← "הפשר" כדי להמשיך`;
+  }
+  if (all) {
+    hint.hidden = projects.length > 0;
+    hint.innerHTML = filter === 'frozen' ? 'אין פרויקטים מוקפאים.' : 'אין פרויקטים פעילים.';
+  } else {
+    hint.hidden = tasks.length > 0;
+    hint.innerHTML = 'הלוח ריק.<br>גרור לכאן משימה מהמאגר, או לחץ על משימה במאגר ובחר "שבץ בלוח".';
+  }
 
   if (renderBoard.first !== false) {
     renderBoard.first = false;
@@ -540,8 +649,8 @@ window.addEventListener('pointerup', (e) => {
   if (!d.moved) return openTaskEditor(t);
   t.start = d.newStart; t.end = d.newEnd;
   if (d.mode === 'move') {
-    const st = stageAtPoint(e.clientX, e.clientY);
-    if (st && current().stages.some((s) => s.id === st)) t.stageId = st;
+    const st = stageAtPoint(e.clientX, e.clientY), tp = project(t.projectId);
+    if (st && tp && tp.stages.some((s) => s.id === st)) t.stageId = st;
   }
   markGoogle(t);
   commit();
@@ -622,6 +731,10 @@ $('#gantt').addEventListener('click', (e) => {
   if (dep) { const [succ, from] = dep.getAttribute('data-dep').split('|'); return openDepDialog(succ, from); }
   const open = e.target.closest('[data-open]');
   if (open) return openTaskEditor(task(open.dataset.open));
+  const tp = e.target.closest('[data-toggle-proj]');
+  if (tp) { ui.expanded = ui.expanded || {}; ui.expanded[tp.dataset.toggleProj] = !ui.expanded[tp.dataset.toggleProj]; saveUi(); return renderBoard(); }
+  const op = e.target.closest('[data-open-proj]');
+  if (op) { ui.view = 'project'; ui.projectId = op.dataset.openProj; saveUi(); renderBoard.first = true; return render(); }
   const tog = e.target.closest('[data-stage-toggle]');
   if (tog) { const id = tog.dataset.stageToggle; ui.collapsed[id] = !ui.collapsed[id]; saveUi(); renderBoard(); }
 });
@@ -692,7 +805,8 @@ function dropPool(d, e) {
   if (!d.active || !d.moved) return openPoolTask(t);
   const el = document.elementFromPoint(e.clientX, e.clientY);
   if (!el || !el.closest('.g-track')) return;
-  const cur = current() || newProject('פרויקט חדש');
+  const row = el.closest('.g-row');
+  const cur = (row && project(row.dataset.project)) || current() || newProject('פרויקט חדש');
   const day = dayAtClientX(e.clientX);
   const st = stageAtPoint(e.clientX, e.clientY);
   schedule(t, cur, cur.stages.some((s) => s.id === st) ? st : cur.stages[0].id, isoOf(day));
@@ -1117,6 +1231,17 @@ function openProjectDialog(p) {
     <label>צבע<div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${c === draft.color ? 'on' : ''}" data-color="${c}" style="background:${c}" aria-label="צבע"></button>`).join('')}</div></label>
     <label>שלבים<div class="stages-edit" id="stagesEdit">${stagesHtml()}</div></label>
     <button type="button" class="ghost small" id="addStage">＋ שלב</button>
+    <label>תאריך יעד (לא חובה)<input type="date" name="target" value="${draft.target || ''}"></label>
+    <p class="note">היעד מופיע על הלוח כקו אדום. אם הסיום הצפוי אחריו, יופיע ⚠️.</p>
+    ${isNew ? '' : `<fieldset class="deps">
+      <legend>${p.frozen ? '❄️ הפרויקט מוקפא' : 'הקפאה'}</legend>
+      ${p.frozen ? `<p class="note">מוקפא מ-${short(p.frozen.since)}${p.frozen.why ? ` · ${esc(p.frozen.why)}` : ''}. בהפשרה, מה שלא התחיל יזוז קדימה ${Math.max(0, dayNum(todayIso()) - dayNum(p.frozen.since))} ימים, ומשימות שהתחילו יתארכו באותו מספר ימים.</p>
+        <button value="thaw" class="primary small" formnovalidate>☀️ הפשר והמשך מהיום</button>`
+      : `<label>למה מקפיאים? (לא חובה)<input type="text" name="why" placeholder="למשל: מחכה לתקציב"></label>
+        <button value="freeze" class="ghost small" formnovalidate>❄️ הקפא פרויקט</button>`}
+      ${(p.freezeLog || []).length ? `<div class="log">${p.freezeLog.map((x) => `<div class="log-item"><span class="log-date">${short(x.date)}</span>
+        <span class="log-text">${x.type === 'freeze' ? `❄️ הוקפא${x.why ? `: ${esc(x.why)}` : ''}` : `☀️ הופשר אחרי ${x.days} ימים`}</span></div>`).join('')}</div>` : ''}
+    </fieldset>`}
     <div class="actions">
       <button value="save" class="primary">${isNew ? 'צור' : 'שמור'}</button>
       <span class="grow"></span>
@@ -1130,16 +1255,21 @@ function openProjectDialog(p) {
       ui.projectId = data.projects[0] ? data.projects[0].id : null; saveUi();
       return commit();
     }
+    if (action === 'freeze') return freezeProject(p, (fd.get('why') || '').trim());
+    if (action === 'thaw') return thawProject(p);
     readStages();
+    draft.target = fd.get('target') || null;
     draft.name = fd.get('name').trim() || 'פרויקט';
     draft.stages = draft.stages.filter((s) => s.name.trim());
     if (!draft.stages.length) draft.stages = [{ id: uid(), name: 'כללי' }];
     if (isNew) {
       const np = newProject(draft.name, draft.color);
       np.stages = draft.stages;
+      np.target = draft.target;
+      ui.view = 'project'; saveUi();
     } else {
       const renamed = p.name !== draft.name;
-      Object.assign(p, draft);
+      Object.assign(p, { name: draft.name, color: draft.color, stages: draft.stages, target: draft.target });
       const ids = new Set(p.stages.map((s) => s.id));
       data.tasks.forEach((t) => {
         if (t.projectId !== p.id) return;
@@ -1171,8 +1301,11 @@ function openProjectDialog(p) {
 // ---------------------------------------------------------------- header & pool controls
 $('#projectSelect').onchange = (e) => {
   if (e.target.value === '__new') { renderHeader(); return openProjectDialog(null); }
-  ui.projectId = e.target.value; saveUi(); renderBoard.first = true; render();
+  if (e.target.value === '__all') ui.view = 'all';
+  else { ui.view = 'project'; ui.projectId = e.target.value; }
+  saveUi(); renderBoard.first = true; render();
 };
+$('#allFilter').onchange = (e) => { ui.allFilter = e.target.value; saveUi(); renderBoard(); };
 $('#projectMenuBtn').onclick = () => current() && openProjectDialog(current());
 document.querySelectorAll('.zoom button').forEach((b) => b.onclick = () => setZoom(ZOOM[b.dataset.zoom]));
 $('#todayBtn').onclick = scrollToToday;

@@ -120,7 +120,7 @@ input[type=range] { accent-color: var(--primary); width: 100%; }
 .g-grid { position: absolute; top: 0; bottom: 0; pointer-events: none; }
 .g-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--today); z-index: 4; pointer-events: none; }
 .g-today::before {
-  content: 'היום'; position: absolute; top: 52px; left: 4px; font-size: 10px; color: var(--today);
+  content: 'היום'; position: absolute; top: calc(var(--head-h, 48px) + 4px); left: 4px; font-size: 10px; color: var(--today);
   background: var(--bg); padding: 0 3px; border-radius: 4px;
 }
 .bar {
@@ -201,6 +201,30 @@ input[type=range] { accent-color: var(--primary); width: 100%; }
 .cost-sum { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .cost-sum.over, .over { color: var(--danger) !important; }
 .g-corner { align-items: flex-end; }
+
+/* ---------- stage 7: frozen projects, target date, all projects ---------- */
+.is-frozen .bar, .is-frozen .ms, .is-frozen .stage-span, .g-row.frozen .bar, .g-row.frozen .ms, .g-row.frozen .sum-bar { filter: grayscale(.9); opacity: .6; }
+.board-note {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 8; max-width: calc(100% - 32px);
+  background: #DCEBFA; color: #134A94; border-radius: 12px; padding: 8px 14px; font-size: 14px; box-shadow: var(--shadow); text-align: center;
+}
+.g-target { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--danger); z-index: 4; pointer-events: none; }
+.g-target::before {
+  content: 'יעד'; position: absolute; top: calc(var(--head-h, 48px) + 4px); left: 4px; font-size: 10px; color: var(--danger);
+  background: var(--bg); padding: 0 3px; border-radius: 4px;
+}
+.target-tick { position: absolute; top: 4px; bottom: 4px; width: 0; border-left: 2px dashed var(--danger); }
+.g-row.projrow { height: calc(var(--row-h) + 6px); }
+.g-row.projrow .g-label { font-weight: 500; }
+.pdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.mini-open { margin-inline-start: auto; padding: 2px 8px; font-size: 12px; box-shadow: none; border: 1px solid var(--line); background: var(--card); }
+.sum-bar {
+  position: absolute; top: 7px; height: calc(var(--row-h) - 8px); border-radius: 9px; overflow: hidden; display: flex; align-items: center;
+  background: color-mix(in srgb, var(--c) 45%, var(--bg)); box-shadow: var(--shadow); color: #fff;
+}
+.sum-bar .fill { position: absolute; inset: 0; right: auto; background: var(--c); }
+.sum-bar .txt { position: relative; font-size: 12px; padding: 0 8px; white-space: nowrap; direction: rtl; width: 100%; text-align: right; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.sum-ms { position: absolute; top: calc(var(--row-h) / 2 - 3px); width: 12px; height: 12px; transform: rotate(45deg); background: var(--c); border: 2px solid #fff; z-index: 1; }
 
 /* ---------- dialogs ---------- */
 dialog {

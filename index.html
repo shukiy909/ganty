@@ -19,6 +19,9 @@
   <div class="proj">
     <select id="projectSelect" aria-label="פרויקט"></select>
     <button id="projectMenuBtn" class="icon" aria-label="אפשרויות פרויקט">⋮</button>
+    <select id="allFilter" class="who-filter" aria-label="אילו פרויקטים" hidden>
+      <option value="active">פעילים</option><option value="frozen">מוקפאים</option><option value="all">הכול</option>
+    </select>
   </div>
   <div class="zoom" role="group" aria-label="תצוגת זמן">
     <button data-zoom="day">ימים</button>
@@ -41,6 +44,7 @@
   <section class="board-wrap">
     <div id="gantt" class="gantt" dir="ltr"></div>
     <div id="emptyHint" class="empty-hint" hidden></div>
+    <div id="boardNote" class="board-note" hidden></div>
   </section>
   <aside id="pool" class="pool">
     <div class="pool-head">
