@@ -1,5 +1,5 @@
 // Keeps Ganty's own files on the device, so it opens fast and works offline.
-const CACHE = 'ganty-v4';
+const CACHE = 'ganty-v5';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'help.html'];
 
 self.addEventListener('install', (e) => {

@@ -937,6 +937,7 @@ function openTaskEditor(t) {
     <div class="actions">
       <button value="save" class="primary">שמור</button>
       <button value="unschedule" class="ghost" formnovalidate>החזר למאגר</button>
+      <button type="button" class="ghost" id="toClaude" title="מעתיק תיאור מסודר של המשימה, להדבקה בשיחה עם Claude">🤖 העתק ל-Claude</button>
       <span class="grow"></span>
       <button value="delete" class="danger" formnovalidate>מחק</button>
       <button value="cancel" class="ghost" formnovalidate>ביטול</button>
@@ -1162,6 +1163,7 @@ function openTaskEditor(t) {
     drawLog();
     // readRes is used by the save handler above
     openTaskEditor.readRes = readRes;
+    f.querySelector('#toClaude').onclick = () => copyText(taskForClaude(t), 'הועתק. הדבק בשיחה עם Claude.');
   });
   function readRes() { openTaskEditor.readRes && openTaskEditor.readRes(); }
 }
@@ -1227,7 +1229,14 @@ function openProjectDialog(p) {
       <button type="button" class="icon" data-del="${i}" aria-label="מחק שלב">✕</button></div>`).join('');
   showDialog(`
     <h3>${isNew ? 'פרויקט חדש' : 'הגדרות פרויקט'}</h3>
-    <label>שם<input type="text" name="name" value="${esc(draft.name)}" required placeholder="למשל: אתר לעסק"></label>
+    ${isNew && (data.templates || []).length ? `<fieldset class="deps"><legend>📋 מתבנית (לא חובה)</legend>
+      <div class="row2">
+        <label>תבנית<select name="tpl"><option value="">פרויקט ריק</option>${data.templates.map((x) => `<option value="${x.id}">${esc(x.name)} (${x.tasks.length} משימות)</option>`).join('')}</select></label>
+        <label>תאריך התחלה<input type="date" name="tplStart" value="${todayIso()}"></label>
+      </div>
+      <div class="tpl-list">${data.templates.map((x) => `<span class="tpl-chip">${esc(x.name)}<button type="button" class="icon" data-tpl-rm="${x.id}" aria-label="מחק תבנית">✕</button></span>`).join('')}</div>
+    </fieldset>` : ''}
+    <label>שם<input type="text" name="name" value="${esc(draft.name)}" ${isNew && (data.templates || []).length ? '' : 'required'} placeholder="למשל: אתר לעסק"></label>
     <label>צבע<div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${c === draft.color ? 'on' : ''}" data-color="${c}" style="background:${c}" aria-label="צבע"></button>`).join('')}</div></label>
     <label>שלבים<div class="stages-edit" id="stagesEdit">${stagesHtml()}</div></label>
     <button type="button" class="ghost small" id="addStage">＋ שלב</button>
@@ -1245,6 +1254,7 @@ function openProjectDialog(p) {
     <div class="actions">
       <button value="save" class="primary">${isNew ? 'צור' : 'שמור'}</button>
       <span class="grow"></span>
+      ${isNew ? '' : '<button value="tpl" class="ghost" formnovalidate>📋 שמור כתבנית</button>'}
       ${isNew ? '' : '<button value="delete" class="danger" formnovalidate>מחק פרויקט</button>'}
       <button value="cancel" class="ghost" formnovalidate>ביטול</button>
     </div>`, (action, fd) => {
@@ -1255,6 +1265,12 @@ function openProjectDialog(p) {
       ui.projectId = data.projects[0] ? data.projects[0].id : null; saveUi();
       return commit();
     }
+    if (action === 'tpl') { setTimeout(() => saveTemplateDialog(p), 0); return; }
+    if (isNew && fd.get('tpl')) {
+      const tp = (data.templates || []).find((x) => x.id === fd.get('tpl'));
+      if (tp) { projectFromTemplate(tp, fd.get('name').trim() || tp.name, fd.get('tplStart') || todayIso(), draft.color); return; }
+    }
+    if (!fd.get('name').trim()) { alert('תן לפרויקט שם.'); return false; }
     if (action === 'freeze') return freezeProject(p, (fd.get('why') || '').trim());
     if (action === 'thaw') return thawProject(p);
     readStages();
@@ -1279,6 +1295,17 @@ function openProjectDialog(p) {
     }
     commit();
   }, (f) => {
+    f.querySelectorAll('[data-tpl-rm]').forEach((b) => b.onclick = () => {
+      const x = data.templates.find((y) => y.id === b.dataset.tplRm);
+      if (!x || !confirm(`למחוק את התבנית "${x.name}"?`)) return;
+      data.templates = data.templates.filter((y) => y !== x);
+      if (x.builtin) data.builtinRemoved = true;
+      b.closest('.tpl-chip').remove();
+      const opt = f.tpl && [...f.tpl.options].find((o) => o.value === x.id);
+      if (opt) opt.remove();
+      commit();
+    });
+    if (f.tpl) f.tpl.onchange = () => { if (!f.name.value.trim() && f.tpl.value) f.name.placeholder = f.tpl.selectedOptions[0].textContent.replace(/ \(.*$/, ''); };
     f.querySelectorAll('[data-color]').forEach((b) => b.onclick = () => {
       draft.color = b.dataset.color;
       f.querySelectorAll('.swatch').forEach((x) => x.classList.toggle('on', x === b));
@@ -1309,6 +1336,9 @@ $('#allFilter').onchange = (e) => { ui.allFilter = e.target.value; saveUi(); ren
 $('#projectMenuBtn').onclick = () => current() && openProjectDialog(current());
 document.querySelectorAll('.zoom button').forEach((b) => b.onclick = () => setZoom(ZOOM[b.dataset.zoom]));
 $('#todayBtn').onclick = scrollToToday;
+$('#exportBtn').onclick = () => openExportDialog();
+$('#weeklyBtn').onclick = () => openWeekly();
+$('#claudeBtn').onclick = () => openClaudeList();
 $('#whoFilter').onchange = (e) => { ui.assignee = e.target.value; saveUi(); renderBoard(); };
 $('#tagFilter').onchange = (e) => { ui.tag = e.target.value; saveUi(); renderBoard(); };
 $('#critBtn').onclick = () => { ui.critical = !ui.critical; saveUi(); renderHeader(); renderBoard(); };
@@ -1568,6 +1598,19 @@ function forDrive() {
 async function syncDrive() {
   const firstTime = !data.fileId; // this device never synced before
   const folderId = await driveFolderId();
+  if (!data.readmeDone) {
+    // A short explanation for AI agents that can read this folder.
+    try {
+      const q = encodeURIComponent(`name='Ganty-README.md' and '${folderId}' in parents and trashed=false`);
+      const res = await api('GET', `${DRIVE}/files?q=${q}&fields=files(id)&spaces=drive`);
+      if (!(res.files || []).length) {
+        const boundary = 'ganty' + uid();
+        const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: 'Ganty-README.md', parents: [folderId], mimeType: 'text/markdown' })}\r\n--${boundary}\r\nContent-Type: text/markdown; charset=UTF-8\r\n\r\n${README}\r\n--${boundary}--`;
+        await api('POST', `${UPLOAD}/files?uploadType=multipart&fields=id`, body, `multipart/related; boundary=${boundary}`);
+      }
+      data.readmeDone = true;
+    } catch (e) { /* next time */ }
+  }
   const fileId = await driveFileId(folderId);
   if (fileId && (firstTime || !data.dirty)) {
     const remote = await api('GET', `${DRIVE}/files/${fileId}?alt=media`);
@@ -1635,9 +1678,411 @@ async function syncNow() {
 setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 120e3);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
 
+// ---------------------------------------------------------------- copy helper
+function copyText(text, okMsg) {
+  const done = () => setStatus(okMsg || 'הועתק');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => fallback());
+  else fallback();
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch { prompt('העתק את הטקסט:', text); }
+    ta.remove();
+  }
+}
+
+// ---------------------------------------------------------------- 🤖 AI helpers
+/** A task written out for Claude: everything it needs to help, in plain Hebrew. */
+function taskForClaude(t) {
+  const p = project(t.projectId);
+  const st = p && p.stages.find((x) => x.id === t.stageId);
+  const lines = [`משימה: ${t.title}`];
+  if (p) lines.push(`פרויקט: ${p.name}${st ? ` · שלב: ${st.name}` : ''}`);
+  if (t.scheduled) lines.push(`תאריכים: ${short(t.start)}–${short(t.end)} · התקדמות ${t.done ? 100 : t.progress || 0}%${t.done ? ' · בוצע' : ''}`);
+  if (t.status && t.status !== 'todo') lines.push(`סטטוס: ${STATUS[t.status]}${t.statusWhy ? ` (${t.statusWhy})` : ''}`);
+  if (t.priority === 'high') lines.push('עדיפות: גבוהה');
+  if (t.desc) lines.push('', 'תיאור:', t.desc);
+  if ((t.steps || []).length) { lines.push('', 'צעדים:'); t.steps.forEach((x) => lines.push(`- [${x.done ? 'x' : ' '}] ${x.text}`)); }
+  if ((t.deps || []).length) {
+    lines.push('', 'תלויה ב:');
+    t.deps.forEach((d) => { const o = task(d.from); if (o) lines.push(`- ${o.title} (${depTip(d)})${o.done ? ' – בוצע' : ''}`); });
+  }
+  if ((t.files || []).length) { lines.push('', 'קבצים וקישורים:'); t.files.forEach((x) => lines.push(`- ${x.name}: ${x.url}`)); }
+  if ((t.resources || []).length) { lines.push('', 'משאבים:'); t.resources.forEach((r) => lines.push(`- ${r.name} (${KINDS[r.kind] || ''})${r.costPlan ? ` · ${money(r.costPlan)}` : ''}`)); }
+  if ((t.log || []).length) { lines.push('', 'עדכונים אחרונים:'); t.log.slice(0, 5).forEach((x) => lines.push(`- ${short(x.date)}: ${x.text}`)); }
+  lines.push('', 'מה אני צריך ממך:', '');
+  return lines.join('\n');
+}
+
+/** All open tasks Claude is responsible for, in every project. */
+function openClaudeList() {
+  const list = data.tasks.filter((t) => !t.deleted && !t.done && t.assignee === 'Claude')
+    .sort((a, b) => ((a.start || a.due || '9') < (b.start || b.due || '9') ? -1 : 1));
+  showDialog(`
+    <h3>🤖 המשימות של Claude <span class="note">(${list.length})</span></h3>
+    ${list.length ? `<div class="claude-list">${list.map((t) => {
+      const p = project(t.projectId);
+      return `<div class="claude-item"><div><b>${esc(t.title)}</b><div class="note">${esc(p ? p.name : 'ללא פרויקט')}${t.start ? ` · ${short(t.start)}–${short(t.end)}` : ''}${t.status === 'blocked' ? ' · ⛔ חסום' : ''}</div></div>
+        <button type="button" class="small" data-copy="${t.id}">העתק</button></div>`;
+    }).join('')}</div>` : '<p class="note">אין משימות פתוחות שבהן Claude אחראי. בוחרים אחראי בטופס המשימה.</p>'}
+    <p class="note">מעתיקים משימה ומדביקים אותה בשיחה עם Claude. בתיקייה Ganty ב-Drive יש גם קובץ הסבר (Ganty-README.md) לסוכני AI עם גישה ל-Drive.</p>
+    <div class="actions">
+      ${list.length ? '<button type="button" class="primary" id="copyAll">העתק הכול ל-Claude</button>' : ''}
+      <span class="grow"></span><button value="cancel" class="ghost" formnovalidate>סגור</button>
+    </div>`, () => {}, (f) => {
+    f.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => copyText(taskForClaude(task(b.dataset.copy)), 'הועתק. הדבק בשיחה עם Claude.'));
+    const all = f.querySelector('#copyAll');
+    if (all) all.onclick = () => copyText(`אלה המשימות שלך בפרויקטים שלי (${list.length}):\n\n` + list.map(taskForClaude).join('\n---\n\n'), 'הכול הועתק.');
+  });
+}
+
+/** Explains ganty-data.json to AI agents that can read the Drive folder. */
+const README = `# Ganty – מבנה הנתונים (לסוכני AI)
+
+הקובץ ganty-data.json בתיקייה הזו מחזיק את כל הפרויקטים של לוח הגאנט Ganty.
+תאריכים בפורמט YYYY-MM-DD. אחרי כל שינוי, עדכנו את updatedAt (מילישניות) כדי ש-Ganty יטען את הגרסה החדשה.
+
+## שדות עיקריים
+- projects[]: id, name, color, stages[] (id, name), target (תאריך יעד), frozen ({since, why} או null), freezeLog[]
+- tasks[]: id, title, projectId, stageId, scheduled (בלוח או במאגר), start, end, progress (0–100), done, doneOn,
+  milestone, manualFinish, assignee ("אני" / "Claude" / "סוכן AI" / שם), status (todo/doing/waiting/blocked), statusWhy,
+  priority (high/normal/low), tags[], desc, steps[] (text, done), deps[] (from = id של משימה קודמת, type = FS/SS/FF, lag = ימי המתנה),
+  files[] (name, url), resources[] (name, kind = person/material/money, qty, unit, costPlan, costAct, phone), log[] (date, text),
+  hoursEst, hoursAct, gid (מזהה ב-Google Tasks, ברשימה "משימות לגנט")
+- templates[]: תבניות פרויקט (משימות עם offset ו-dur בימים, deps לפי key)
+
+## כללים
+- משימה תלויה (FS) מתחילה אחרי effEnd של הקודמת + 1 + lag. משימה עם manualFinish שלא בוצעה מסתיימת לכל המוקדם היום.
+- אל תמחקו משימות עם gid: סמנו done או deleted, וגאנטי יסנכרן ל-Google Tasks.
+`;
+
+// ---------------------------------------------------------------- 📋 project templates
+const BUILTIN_TPL = () => ({
+  id: 'tpl-claude', builtin: true, name: 'פרויקט Claude טיפוסי', color: '#6750A4',
+  stages: ['אפיון', 'בנייה', 'בדיקות', 'השקה'],
+  tasks: [
+    { key: 'a1', title: 'הגדרת מטרות ודרישות', stage: 0, offset: 0, dur: 2, assignee: 'אני' },
+    { key: 'a2', title: 'אפיון עם Claude', stage: 0, offset: 2, dur: 2, assignee: 'Claude', deps: [{ from: 'a1', type: 'FS', lag: 0 }] },
+    { key: 'a3', title: 'אפיון מאושר', stage: 0, offset: 4, dur: 1, milestone: true, deps: [{ from: 'a2', type: 'FS', lag: 0 }] },
+    { key: 'b1', title: 'בניית גרסה ראשונה', stage: 1, offset: 5, dur: 5, assignee: 'Claude', manualFinish: true, deps: [{ from: 'a3', type: 'FS', lag: 0 }] },
+    { key: 'b2', title: 'בדיקה והערות', stage: 1, offset: 10, dur: 2, assignee: 'אני', deps: [{ from: 'b1', type: 'FS', lag: 0 }] },
+    { key: 'b3', title: 'תיקונים', stage: 1, offset: 12, dur: 3, assignee: 'Claude', deps: [{ from: 'b2', type: 'FS', lag: 0 }] },
+    { key: 'c1', title: 'בדיקה מלאה במכשיר', stage: 2, offset: 15, dur: 2, assignee: 'אני', deps: [{ from: 'b3', type: 'FS', lag: 0 }] },
+    { key: 'c2', title: 'תיקוני באגים', stage: 2, offset: 17, dur: 2, assignee: 'Claude', deps: [{ from: 'c1', type: 'FS', lag: 0 }] },
+    { key: 'd1', title: 'פרסום / העלאה', stage: 3, offset: 19, dur: 1, assignee: 'אני', deps: [{ from: 'c2', type: 'FS', lag: 0 }] },
+    { key: 'd2', title: 'השקה', stage: 3, offset: 20, dur: 1, milestone: true, deps: [{ from: 'd1', type: 'FS', lag: 0 }] },
+  ],
+});
+function ensureBuiltinTemplate() {
+  data.templates = data.templates || [];
+  if (!data.builtinRemoved && !data.templates.some((x) => x.id === 'tpl-claude')) data.templates.push(BUILTIN_TPL());
+}
+
+/** A project → a template: lengths and gaps between tasks, counted from its first day. */
+function saveTemplateDialog(p) {
+  showDialog(`
+    <h3>📋 שמירה כתבנית</h3>
+    <label>שם התבנית<input type="text" name="tname" value="${esc(p.name)}" required></label>
+    <p class="note">נשמרים השלבים, המשימות עם המשכים והמרווחים ביניהן, התלויות, הצעדים, המשאבים (בלי עלות בפועל), האחראים ואבני הדרך. התאריכים לא נשמרים.</p>
+    <div class="actions"><button value="save" class="primary">שמור תבנית</button><span class="grow"></span><button value="cancel" class="ghost" formnovalidate>ביטול</button></div>`, (action, fd) => {
+    const ts = data.tasks.filter((t) => t.projectId === p.id && t.scheduled && !t.deleted);
+    const base = ts.length ? Math.min(...ts.map((t) => dayNum(t.start))) : dayNum(todayIso());
+    const stageIdx = new Map(p.stages.map((x, i) => [x.id, i]));
+    const tpl = {
+      id: uid(), name: fd.get('tname').trim() || p.name, color: p.color, stages: p.stages.map((x) => x.name),
+      tasks: ts.map((t) => ({
+        key: t.id, title: t.title, stage: stageIdx.get(t.stageId) ?? 0,
+        offset: dayNum(t.start) - base, dur: dayNum(t.end) - dayNum(t.start) + 1,
+        milestone: !!t.milestone, manualFinish: !!t.manualFinish, assignee: t.assignee || null,
+        desc: t.desc || '', priority: t.priority || 'normal', tags: t.tags || [],
+        steps: (t.steps || []).map((x) => ({ text: x.text })),
+        resources: (t.resources || []).map(({ name, kind, qty, unit, costPlan, phone }) => ({ name, kind, qty, unit, costPlan, phone })),
+        deps: (t.deps || []).filter((d) => ts.some((o) => o.id === d.from)),
+      })),
+    };
+    data.templates = (data.templates || []).filter((x) => x.name !== tpl.name).concat(tpl);
+    commit();
+    setStatus(`התבנית "${tpl.name}" נשמרה`);
+  });
+}
+
+/** A new project from a template, starting on [start]. */
+function projectFromTemplate(tpl, name, start, color) {
+  const p = newProject(name, color || tpl.color);
+  p.stages = tpl.stages.map((n) => ({ id: uid(), name: n }));
+  const ids = new Map(tpl.tasks.map((x) => [x.key, uid()]));
+  const s0 = dayNum(start);
+  for (const x of tpl.tasks) {
+    const a = s0 + (x.offset || 0);
+    data.tasks.push({
+      id: ids.get(x.key), title: x.title, projectId: p.id, stageId: (p.stages[x.stage] || p.stages[0]).id,
+      scheduled: true, start: isoOf(a), end: isoOf(x.milestone ? a : a + Math.max(1, x.dur || 1) - 1), progress: 0,
+      milestone: !!x.milestone, manualFinish: !!x.manualFinish, assignee: x.assignee || null,
+      desc: x.desc || '', priority: x.priority || 'normal', tags: x.tags || [],
+      steps: (x.steps || []).map((y) => ({ id: uid(), text: y.text, done: false })),
+      resources: (x.resources || []).map((r) => Object.assign({ id: uid() }, r)),
+      deps: (x.deps || []).filter((d) => ids.has(d.from)).map((d) => ({ from: ids.get(d.from), type: d.type || 'FS', lag: d.lag || 0 })),
+      gDirty: true,
+    });
+  }
+  ui.view = 'project'; saveUi();
+  renderBoard.first = true;
+  commit();
+}
+
+// ---------------------------------------------------------------- 🗓️ weekly summary
+const weekKey = () => { const n = dayNum(todayIso()); return n - weekday(n); }; // the Sunday of this week
+
+function weeklyData(projectIds) {
+  const today = dayNum(todayIso());
+  const inScope = data.tasks.filter((t) => !t.deleted && t.scheduled && projectIds.includes(t.projectId));
+  const pname = (t) => (projectIds.length > 1 ? ` (${project(t.projectId).name})` : '');
+  return {
+    done: inScope.filter((t) => t.done && t.doneOn && dayNum(t.doneOn) > today - 7).map((t) => `${t.title}${pname(t)}`),
+    late: inScope.filter((t) => !t.done && !project(t.projectId).frozen && (effEnd(t) < today || (t.manualFinish && effEnd(t) > dayNum(t.end)) || ['blocked', 'waiting'].includes(t.status)))
+      .map((t) => `${t.status === 'blocked' ? '⛔ ' : t.status === 'waiting' ? '⏸ ' : ''}${t.title}${pname(t)} – ${effEnd(t) < today || effEnd(t) > dayNum(t.end) ? `היה אמור להסתיים ב-${short(t.end)}` : (t.statusWhy || STATUS[t.status])}`),
+    starting: inScope.filter((t) => !t.done && !t.milestone && dayNum(t.start) >= today && dayNum(t.start) < today + 7)
+      .sort((a, b) => (a.start < b.start ? -1 : 1)).map((t) => `${short(t.start)} · ${t.title}${pname(t)}${t.assignee ? ` · ${t.assignee}` : ''}`),
+    milestones: inScope.filter((t) => t.milestone && !t.done && dayNum(t.start) >= today && dayNum(t.start) < today + 14)
+      .sort((a, b) => (a.start < b.start ? -1 : 1)).map((t) => `${short(t.start)} · ◆ ${t.title}${pname(t)}`),
+    frozen: data.projects.filter((p) => projectIds.includes(p.id) && p.frozen).map((p) => `❄️ ${p.name} מוקפא מ-${short(p.frozen.since)}`),
+  };
+}
+
+function weeklyText(w, title) {
+  const part = (head, items) => (items.length ? `${head}\n${items.map((x) => `• ${x}`).join('\n')}\n` : '');
+  return [`🗓️ ${title}`, '',
+    part('✅ הושלם השבוע:', w.done), part('⚠️ מתעכב:', w.late), part('▶️ מתחיל השבוע:', w.starting),
+    part('◆ אבני דרך בשבועיים הקרובים:', w.milestones), part('', w.frozen)].join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function openWeekly(auto) {
+  if (!data.projects.length) return;
+  let scope = ui.view === 'all' ? 'all' : 'project';
+  const ids = () => (scope === 'all' ? data.projects.map((p) => p.id) : [current().id]);
+  const sec = (head, items, empty) => `<div class="wk"><h4>${head}</h4>${items.length ? `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : `<p class="note">${empty}</p>`}</div>`;
+  const body = () => {
+    const w = weeklyData(ids());
+    return sec('✅ מה הושלם בשבוע האחרון', w.done, 'שום דבר עוד לא סומן כבוצע השבוע.')
+      + sec('⚠️ מה מתעכב', w.late, 'אין עיכובים. 👍')
+      + sec('▶️ מה מתחיל השבוע', w.starting, 'אין משימות שמתחילות השבוע.')
+      + sec('◆ אבני דרך בשבועיים הקרובים', w.milestones, 'אין אבני דרך קרובות.')
+      + (w.frozen.length ? sec('❄️ מוקפאים', w.frozen, '') : '');
+  };
+  const title = () => `סיכום שבועי · ${scope === 'all' ? 'כל הפרויקטים' : current().name} · ${short(todayIso())}`;
+  showDialog(`
+    <h3>🗓️ סיכום שבועי</h3>
+    ${data.projects.length > 1 ? `<div class="zoom wk-scope"><button type="button" data-scope="project" class="${scope === 'project' ? 'on' : ''}">${esc(current().name)}</button><button type="button" data-scope="all" class="${scope === 'all' ? 'on' : ''}">כל הפרויקטים</button></div>` : ''}
+    <div id="wkBody" class="wk-body">${body()}</div>
+    <label class="check"><input type="checkbox" id="wkAuto" ${ui.weeklyAuto !== false ? 'checked' : ''}> לפתוח את הסיכום לבד בכניסה הראשונה בכל שבוע</label>
+    <div class="actions">
+      <button type="button" class="primary" id="wkWa">שלח בוואטסאפ</button>
+      <button type="button" class="ghost" id="wkCopy">העתק</button>
+      <span class="grow"></span><button value="cancel" class="ghost" formnovalidate>סגור</button>
+    </div>`, () => {}, (f) => {
+    f.querySelectorAll('[data-scope]').forEach((b) => b.onclick = () => {
+      scope = b.dataset.scope;
+      f.querySelectorAll('[data-scope]').forEach((x) => x.classList.toggle('on', x === b));
+      f.querySelector('#wkBody').innerHTML = body();
+    });
+    f.querySelector('#wkAuto').onchange = (e) => { ui.weeklyAuto = e.target.checked; saveUi(); };
+    f.querySelector('#wkCopy').onclick = () => copyText(weeklyText(weeklyData(ids()), title()), 'הסיכום הועתק');
+    f.querySelector('#wkWa').onclick = () => window.open(`https://wa.me/?text=${encodeURIComponent(weeklyText(weeklyData(ids()), title()))}`, '_blank');
+  });
+  if (auto) { ui.weeklySeen = weekKey(); saveUi(); }
+}
+
+// ---------------------------------------------------------------- 📄 export to PDF (print)
+const PAPER = { a4: { w: 277, h: 190 }, a3: { w: 410, h: 277 } }; // printable area in mm
+
+function openExportDialog() {
+  const cur = current();
+  if (!cur) return;
+  showDialog(`
+    <h3>📄 ייצוא ל-PDF</h3>
+    ${data.projects.length > 1 ? `<label>מה לייצא<select name="what"><option value="project" ${ui.view !== 'all' ? 'selected' : ''}>${esc(cur.name)}</option><option value="all" ${ui.view === 'all' ? 'selected' : ''}>כל הפרויקטים</option></select></label>` : ''}
+    <label>גודל<select name="size">
+      <option value="a4">דף A4 אחד (לרוחב)</option>
+      <option value="a3">שני דפי A4 שמתחברים לגודל A3</option>
+    </select></label>
+    <p class="note" id="sizeNote"></p>
+    <label class="check"><input type="checkbox" name="table" checked> לכלול טבלת משימות (בדפים נוספים)</label>
+    <p class="note">בחלון ההדפסה בחר <b>"שמירה כ-PDF"</b> כדי לקבל קובץ, או מדפסת כדי להדפיס.</p>
+    <div class="actions"><button value="print" class="primary">הכן להדפסה</button><span class="grow"></span><button value="cancel" class="ghost" formnovalidate>ביטול</button></div>`, (action, fd) => {
+    const what = fd.get('what') || 'project';
+    const projects = what === 'all' ? data.projects : [cur];
+    setTimeout(() => printChart(projects, what === 'all', fd.get('size'), fd.get('table') === 'on'), 50);
+  }, (f) => {
+    const say = () => { f.querySelector('#sizeNote').textContent = f.size.value === 'a3' ? 'הגאנט מודפס בגודל A3 ומחולק לשני דפי A4 לעומד. מדביקים אותם זה לצד זה לפי הסימון בשוליים: דף 1 משמאל, דף 2 מימין.' : 'כל הגאנט נכנס לדף אחד.'; };
+    f.size.onchange = say; say();
+  });
+}
+
+/** Builds the chart as SVG pages (mm units) for the paper size, splitting rows over pages when needed. */
+function chartSvgPages(projects, allMode, paper) {
+  const W = paper.w, H = paper.h, today = dayNum(todayIso());
+  const rows = [];
+  for (const p of projects) {
+    const ts = data.tasks.filter((t) => t.projectId === p.id && t.scheduled && !t.deleted);
+    if (allMode) {
+      const st = projectStats(p);
+      rows.push({ kind: 'proj', p, st });
+      continue;
+    }
+    for (const sg of p.stages) {
+      const items = ts.filter((t) => (t.stageId || p.stages[0].id) === sg.id).sort((a, b) => (a.start < b.start ? -1 : 1));
+      if (!items.length) continue;
+      rows.push({ kind: 'stage', p, name: sg.name, items });
+      items.forEach((t) => rows.push({ kind: 'task', p, t }));
+    }
+  }
+  const all = data.tasks.filter((t) => t.scheduled && !t.deleted && projects.some((p) => p.id === t.projectId));
+  let a = Math.min(today, ...all.map((t) => dayNum(t.start))) - 2;
+  let b = Math.max(today, ...all.map(effEnd), ...projects.filter((p) => p.target).map((p) => dayNum(p.target))) + 3;
+  if (!all.length) { a = today - 3; b = today + 30; }
+  const days = b - a + 1;
+  const titleH = 14, scaleH = 9, labelW = allMode ? 60 : 55;
+  const dw = (W - labelW) / days;
+  const avail = H - titleH - scaleH;
+  const rowH = Math.max(4.2, Math.min(8, avail / Math.max(1, rows.length)));
+  const perPage = Math.max(1, Math.floor(avail / rowH));
+  const x = (n) => labelW + (n - a) * dw;
+  const fs = Math.min(3.2, rowH * 0.42);
+
+  // Scale (months on top; days, weeks or months below, by space)
+  let scale = '';
+  for (let n = a; n <= b; n++) {
+    const d = new Date(n * 864e5);
+    const firstShort = n === a && new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)) / 864e5 - n < 10; // no room before the next month's name
+    if ((n === a && !firstShort) || d.getUTCDate() === 1) {
+      scale += `<line x1="${x(n)}" y1="${titleH}" x2="${x(n)}" y2="${titleH + scaleH}" class="gl"/><text x="${x(n) + 1}" y="${titleH + 3.6}" class="sc b">${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}</text>`;
+    }
+    if (dw >= 3.2) scale += `<text x="${x(n) + dw / 2}" y="${titleH + 7.8}" class="sc" text-anchor="middle">${d.getUTCDate()}</text>`;
+    else if (dw >= 0.9 && weekday(n) === 0) scale += `<text x="${x(n) + 0.5}" y="${titleH + 7.8}" class="sc">${short(isoOf(n))}</text>`;
+  }
+  const grid = (y0, y1) => {
+    let g = '';
+    for (let n = a; n <= b; n++) {
+      const d = new Date(n * 864e5);
+      if ((dw >= 3.2) || (dw >= 0.9 && weekday(n) === 0) || d.getUTCDate() === 1) g += `<line x1="${x(n)}" y1="${y0}" x2="${x(n)}" y2="${y1}" class="${d.getUTCDate() === 1 ? 'gm' : 'gl'}"/>`;
+    }
+    return g;
+  };
+
+  const pages = [];
+  for (let i = 0; i < rows.length || (i === 0 && !rows.length); i += perPage) {
+    const chunk = rows.slice(i, i + perPage);
+    const y0 = titleH + scaleH;
+    let body = '';
+    const pos = {};
+    chunk.forEach((r, k) => {
+      const y = y0 + k * rowH, cy = y + rowH / 2;
+      if (r.kind === 'stage') {
+        body += `<rect x="0" y="${y}" width="${W}" height="${rowH}" class="stg"/><text x="${labelW - 2}" y="${cy + fs * 0.35}" class="lb b" text-anchor="end">${esc(r.name)}</text>`;
+        return;
+      }
+      if (r.kind === 'proj') {
+        const st = r.st;
+        body += `<text x="${labelW - 2}" y="${cy + fs * 0.35}" class="lb b" text-anchor="end">${esc(r.p.name)} · ${st.pct}%${st.late ? ' ⚠' : ''}${r.p.frozen ? ' ❄' : ''}</text>`;
+        if (st.count) {
+          const bx = x(st.start), bw = (st.end - st.start + 1) * dw, bh = rowH * 0.62;
+          body += `<rect x="${bx}" y="${cy - bh / 2}" width="${bw}" height="${bh}" rx="1.2" fill="${r.p.color}" opacity=".4"/><rect x="${bx}" y="${cy - bh / 2}" width="${bw * st.pct / 100}" height="${bh}" rx="1.2" fill="${r.p.color}"/>`;
+          st.tasks.filter((t) => t.milestone).forEach((m) => { const mx = x(dayNum(m.start)) + dw / 2, s2 = bh * 0.5; body += `<path d="M${mx} ${cy - s2} L${mx + s2} ${cy} L${mx} ${cy + s2} L${mx - s2} ${cy} Z" fill="#fff" stroke="${r.p.color}" stroke-width=".4"/>`; });
+        }
+        if (r.p.target) body += `<line x1="${x(dayNum(r.p.target) + 1)}" y1="${y + 0.5}" x2="${x(dayNum(r.p.target) + 1)}" y2="${y + rowH - 0.5}" class="tg"/>`;
+        return;
+      }
+      const t = r.t, s = dayNum(t.start), e = effEnd(t);
+      const name = `${t.milestone ? '◆ ' : ''}${t.title}${t.assignee ? ` · ${t.assignee}` : ''}`;
+      body += `<text x="${labelW - 2}" y="${cy + fs * 0.35}" class="lb" text-anchor="end">${esc(name.length > 34 ? name.slice(0, 33) + '…' : name)}</text>`;
+      if (t.milestone) {
+        const mx = x(s) + dw / 2, s2 = rowH * 0.32;
+        body += `<path d="M${mx} ${cy - s2} L${mx + s2} ${cy} L${mx} ${cy + s2} L${mx - s2} ${cy} Z" fill="${r.p.color}"/>`;
+        pos[t.id] = { l: mx - s2, r: mx + s2, y: cy };
+      } else {
+        const bx = x(s), bw = (e - s + 1) * dw, bh = rowH * 0.62, pct = t.done ? 100 : t.progress || 0;
+        body += `<rect x="${bx}" y="${cy - bh / 2}" width="${bw}" height="${bh}" rx="1" fill="${r.p.color}" opacity=".4"/>`
+          + `<rect x="${bx}" y="${cy - bh / 2}" width="${bw * pct / 100}" height="${bh}" rx="1" fill="${r.p.color}"/>`;
+        if (e > dayNum(t.end)) body += `<rect x="${x(dayNum(t.end) + 1)}" y="${cy - bh / 2}" width="${(e - dayNum(t.end)) * dw}" height="${bh}" fill="url(#hatch)"/>`;
+        const label = `${pct}%${t.status === 'blocked' && !t.done ? ' ⛔' : ''}`;
+        body += `<text x="${bx + bw + 0.8}" y="${cy + fs * 0.33}" class="bt">${label}</text>`;
+        pos[t.id] = { l: bx, r: bx + bw, y: cy };
+      }
+    });
+    // dependency arrows between rows on this page
+    let arrows = '';
+    chunk.filter((r) => r.kind === 'task').forEach((r) => (r.t.deps || []).forEach((d) => {
+      const A = pos[d.from], B = pos[r.t.id];
+      if (!A || !B) return;
+      const type = d.type || 'FS';
+      const x1 = type === 'SS' ? A.l : A.r, x2 = type === 'FF' ? B.r : B.l;
+      const xm = type === 'SS' ? Math.min(x1, x2) - 1.5 : Math.max(x1 + 1.5, type === 'FF' ? Math.max(x1, x2) + 1.5 : x1 + 1.5);
+      arrows += `<path d="M${x1} ${A.y} H${xm} V${B.y} H${x2}" class="ar" marker-end="url(#pah)"/>`;
+    }));
+    const lines = `<line x1="${x(today) + dw / 2}" y1="${titleH}" x2="${x(today) + dw / 2}" y2="${H}" class="td"/>`
+      + (!allMode && projects[0].target ? `<line x1="${x(dayNum(projects[0].target) + 1)}" y1="${titleH}" x2="${x(dayNum(projects[0].target) + 1)}" y2="${H}" class="tg"/>` : '');
+    let title;
+    if (allMode) title = `כל הפרויקטים · ${projects.length} פרויקטים`;
+    else {
+      const p = projects[0], st = projectStats(p), c = costs(data.tasks.filter((t) => t.projectId === p.id && !t.deleted));
+      title = `${p.name}${p.frozen ? ' (מוקפא)' : ''} · ${st.pct}%${st.count ? ` · סיום צפוי ${short(isoOf(st.end))}` : ''}${p.target ? ` · יעד ${short(p.target)}${st.late ? ' ⚠' : ''}` : ''}${c.plan || c.act ? ` · עלות ${money(c.act)} מתוך ${money(c.plan)}` : ''}`;
+    }
+    const pageNo = rows.length > perPage ? ` · עמוד ${Math.floor(i / perPage) + 1}/${Math.ceil(rows.length / perPage)}` : '';
+    pages.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}mm" height="${H}mm" class="pchart">
+      <defs><pattern id="hatch" width="1.6" height="1.6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width=".7" height="1.6" fill="#999"/></pattern>
+      <marker id="pah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="#777"/></marker></defs>
+      <text x="${W}" y="6" class="tt" text-anchor="end">${esc(title)}</text>
+      <text x="${W}" y="11" class="sc" text-anchor="end">Ganty · הודפס ב-${short(todayIso())}${pageNo}</text>
+      ${scale}<line x1="0" y1="${titleH + scaleH}" x2="${W}" y2="${titleH + scaleH}" class="gm"/>
+      ${grid(titleH + scaleH, H)}${body}${arrows}${lines}
+      <line x1="${labelW}" y1="${titleH}" x2="${labelW}" y2="${H}" class="gm"/>
+    </svg>`);
+    if (!rows.length) break;
+  }
+  return pages;
+}
+
+function printChart(projects, allMode, size, withTable) {
+  const area = $('#printArea');
+  const svgs = chartSvgPages(projects, allMode, PAPER[size]);
+  let html = '';
+  if (size === 'a3') {
+    // One A3 chart, cut in two A4 (portrait) halves with join marks.
+    svgs.forEach((svg, i) => {
+      for (const half of [0, 1]) {
+        const vb = `${half * 205} 0 205 277`;
+        html += `<div class="pp pp-a4p"><div class="half-tag">${half ? 'דף 2 · מדביקים מימין לדף 1' : 'דף 1 · משמאל'}${svgs.length > 1 ? ` · חלק ${i + 1}` : ''}</div>
+          ${svg.replace(/viewBox="[^"]+" width="[^"]+" height="[^"]+"/, `viewBox="${vb}" width="205mm" height="270mm" preserveAspectRatio="xMidYMin meet"`)}
+          <div class="join ${half ? 'join-l' : 'join-r'}"></div></div>`;
+      }
+    });
+  } else {
+    svgs.forEach((svg) => { html += `<div class="pp pp-a4l">${svg}</div>`; });
+  }
+  if (withTable) {
+    const rows = [];
+    for (const p of projects) {
+      data.tasks.filter((t) => t.projectId === p.id && t.scheduled && !t.deleted)
+        .sort((a, b) => (a.start < b.start ? -1 : 1))
+        .forEach((t) => rows.push(`<tr>${allMode ? `<td>${esc(p.name)}</td>` : ''}<td>${t.milestone ? '◆ ' : ''}${esc(t.title)}</td><td>${esc((p.stages.find((x) => x.id === t.stageId) || {}).name || '')}</td>
+          <td>${short(t.start)}</td><td>${short(isoOf(effEnd(t)))}</td><td>${t.done ? 100 : t.progress || 0}%</td><td>${esc(t.assignee || '')}</td>
+          <td>${t.done ? 'בוצע' : esc(STATUS[t.status || 'todo'])}${t.statusWhy ? ` – ${esc(t.statusWhy)}` : ''}</td></tr>`));
+    }
+    html += `<div class="pp ${size === 'a3' ? 'pp-a4p' : 'pp-a4l'} ptable"><h2>${allMode ? 'כל הפרויקטים' : esc(projects[0].name)} · טבלת משימות</h2>
+      <table><thead><tr>${allMode ? '<th>פרויקט</th>' : ''}<th>משימה</th><th>שלב</th><th>התחלה</th><th>סיום</th><th>%</th><th>אחראי</th><th>סטטוס</th></tr></thead>
+      <tbody>${rows.join('') || '<tr><td colspan="8">אין משימות בלוח.</td></tr>'}</tbody></table></div>`;
+  }
+  area.innerHTML = html;
+  $('#pageSize').textContent = `@page { size: A4 ${size === 'a3' ? 'portrait' : 'landscape'}; margin: ${size === 'a3' ? '10mm 2.5mm' : '10mm'}; }`;
+  window.print();
+}
+
 // ---------------------------------------------------------------- start
 window.addEventListener('resize', () => renderBoard());
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+ensureBuiltinTemplate();
 // Late "manual finish" tasks grow day by day: check the rules on every start.
 if (applyConstraints()) commit(); else render();
+// The weekly summary opens by itself the first time Ganty is opened each week.
+if (ui.weeklyAuto !== false && ui.weeklySeen !== weekKey() && data.tasks.some((t) => t.scheduled && !t.deleted)) setTimeout(() => { if (!dlg.open) openWeekly(true); }, 600);
 initGoogle();

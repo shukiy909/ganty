@@ -32,6 +32,9 @@
   <select id="whoFilter" class="who-filter" aria-label="סינון לפי אחראי"></select>
   <select id="tagFilter" class="who-filter" aria-label="סינון לפי תגית" hidden></select>
   <button id="critBtn" class="ghost" title="מדגיש את המשימות שקובעות את מועד הסיום של הפרויקט">נתיב קריטי</button>
+  <button id="weeklyBtn" class="icon" title="סיכום שבועי">🗓️</button>
+  <button id="exportBtn" class="icon" title="ייצוא ל-PDF / הדפסה">📄</button>
+  <button id="claudeBtn" class="icon" title="המשימות של Claude">🤖</button>
   <a href="help.html" target="_blank" rel="noopener" class="help-link" title="הסבר על תלויות, עם דוגמאות">ℹ️</a>
   <div class="spacer"></div>
   <span id="status" class="status"></span>
@@ -62,6 +65,8 @@
 
 <button id="poolFab" class="pool-fab only-mobile">📥 מאגר <span id="poolFabCount"></span></button>
 
+<div id="printArea" aria-hidden="true"></div>
+<style id="pageSize"></style>
 <dialog id="dlg"><form id="dlgForm" method="dialog"></form></dialog>
 
 <script src="config.js"></script>
