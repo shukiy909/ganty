@@ -1694,8 +1694,9 @@ async function calDelete(calId, eventId) {
 function calBody(t) {
   const p = project(t.projectId);
   return {
-    summary: `${t.done ? '✅ ' : ''}◆ אבן דרך: ${t.title || '(ללא כותרת)'} · Ganty${p ? ' · ' + p.name : ''}`,
-    description: `אבן דרך${p ? ` בפרויקט "${p.name}"` : ''} בלוח הגאנט Ganty.\nhttps://shukiy909.github.io/ganty`,
+    // Project first, so it shows even when the calendar cuts a long title.
+    summary: `${t.done ? '✅ ' : ''}◆ ${p ? p.name + ': ' : ''}${t.title || '(ללא כותרת)'}`,
+    description: `אבן דרך ב-Ganty\nפרויקט: ${p ? p.name : '—'}\nאבן דרך: ${t.title || ''}\nhttps://shukiy909.github.io/ganty`,
     start: { date: t.start },
     end: { date: addDays(t.start, 1) },
     transparency: 'transparent',
