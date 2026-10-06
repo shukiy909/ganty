@@ -304,7 +304,7 @@ function renderPool() {
   $('#poolFabCount').textContent = open ? `(${open})` : '';
   $('#poolList').innerHTML = list.length ? list.map((t) => {
     const p = project(t.projectId);
-    const meta = [p ? p.name : 'ללא פרויקט', t.due ? `יעד ${short(t.due)}` : null, t.gid ? 'מ-Tasky' : null].filter(Boolean).join(' · ');
+    const meta = [p ? p.name : 'ללא פרויקט', t.due ? `יעד ${short(t.due)}` : null, t.gid ? 'מ-Tasky' : null, t.mail ? '✉️ מייל' : null].filter(Boolean).join(' · ');
     return `<div class="pool-item ${t.done ? 'done' : ''}" data-id="${t.id}" style="border-inline-start-color:${p ? p.color : 'var(--line)'}">
       <div class="t">${esc(t.title || '(ללא כותרת)')}</div><div class="m">${esc(meta)}</div></div>`;
   }).join('') : `<div class="pool-empty">אין כאן משימות. הוסף משימה, או שייך משימה ל"משימות לגנט" ב-Tasky.</div>`;
@@ -383,7 +383,7 @@ function renderBoard() {
   const taskRow = (t, p, stageId) => {
     const s0 = dayNum(t.start), left = (s0 - R.a) * dw;
     const cls = [t.done ? 'done' : '', crit.has(t.id) ? 'crit' : '', dimmed(t) ? 'dim' : '', t.manualFinish ? 'manual' : ''].join(' ');
-    const marks = `${t.priority === 'high' ? '<span class="prio" title="עדיפות גבוהה"></span>' : ''}${(t.files || []).length ? `<span class="clip" title="${t.files.length} קבצים">📎${t.files.length}</span>` : ''}`;
+    const marks = `${t.mail ? `<span class="clip" title="מייל מ-Gmail: ${esc(t.mail.title || '')}">✉️</span>` : ''}${t.priority === 'high' ? '<span class="prio" title="עדיפות גבוהה"></span>' : ''}${(t.files || []).length ? `<span class="clip" title="${t.files.length} קבצים">📎${t.files.length}</span>` : ''}`;
     const flag = !t.done && t.status === 'blocked' ? '⛔ ' : !t.done && t.status === 'waiting' ? '⏸ ' : '';
     const who = t.assignee ? `<span class="who" style="background:${whoColor(t.assignee)}" title="אחראי: ${esc(t.assignee)}">${esc(initials(t.assignee))}</span>` : '';
     const name = `${t.milestone ? '◆ ' : ''}${esc(t.title || '(ללא כותרת)')}`;
@@ -911,6 +911,7 @@ function openTaskEditor(t) {
         </div><p class="note">המספר הוא ימי המתנה (מרווח) אחרי המשימה הקודמת.</p>` : '<p class="note">אין עוד משימות בפרויקט שאפשר לחכות להן.</p>'}
       </fieldset>
       ${t.gid ? '<p class="note">מקושרת ל-Tasky: הכותרת, תאריך הסיום ו"בוצע" מתעדכנים גם שם.</p>' : ''}
+      ${t.mail ? `<p><a href="${esc(t.mail.link)}" target="_blank" rel="noopener">✉️ פתח את המייל${t.mail.title ? ': ' + esc(t.mail.title) : ''}</a></p>` : ''}
     </section>
 
     <section class="pane" data-pane="steps" hidden>
@@ -1466,6 +1467,7 @@ async function syncTasks() {
     }
     t.title = r.title || '';
     t.gNotes = r.notes || '';
+    t.mail = mailOf(r);
     t.due = r.due ? r.due.slice(0, 10) : null;
     const done = r.status === 'completed';
     if (done && !t.done) {
@@ -1482,7 +1484,7 @@ async function syncTasks() {
     if (known.has(r.id)) continue;
     const pname = projectNameFromNotes(r.notes);
     data.tasks.push({
-      id: uid(), gid: r.id, title: r.title || '', gNotes: r.notes || '', due: r.due ? r.due.slice(0, 10) : null,
+      id: uid(), gid: r.id, title: r.title || '', gNotes: r.notes || '', mail: mailOf(r), due: r.due ? r.due.slice(0, 10) : null,
       done: r.status === 'completed', progress: r.status === 'completed' ? 100 : 0,
       projectId: pname ? projectByName(pname).id : null, scheduled: false,
     });
@@ -1518,6 +1520,12 @@ async function syncTasks() {
   // Deleted tasks are gone for good once Google knows.
   data.tasks = data.tasks.filter((t) => !(t.deleted && !t.gDirty));
   applyConstraints(); // a task finished (or not) in Tasky may move the ones after it
+}
+
+/** The email Gmail's "add to Tasks" attached to a task (Google keeps it in a separate, read-only field). */
+function mailOf(r) {
+  const l = (r.links || []).find((x) => x.type === 'email' && x.link);
+  return l ? { link: l.link, title: l.description || '' } : null;
 }
 
 function projectNameFromNotes(notes) {
